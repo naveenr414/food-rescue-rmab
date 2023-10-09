@@ -1,2 +1,4 @@
 ./results
 rmab.egg-info
+rmab/secret.py
+rmab/__pycache__/
