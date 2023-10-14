@@ -88,6 +88,7 @@ def random_policy(env, n_episodes, n_epochs):
         if epoch != 0: env.reset_instance()
         print('first state', env.observe())
         all_reward[epoch, 0] = env.get_reward()
+
         for t in range(1, T + 1):
             state = env.observe()
 

@@ -30,7 +30,7 @@ class RMABSimulator(gym.Env):
     '''
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, episode_len, n_instances, n_episodes, budget,
-            number_states=2):
+            number_states=2,reward_style='state',match_probability=0.5):
         '''
         Initialization
         '''
@@ -44,6 +44,8 @@ class RMABSimulator(gym.Env):
         self.episode_len     = episode_len
         self.n_episodes      = n_episodes   # total number of episodes per epoch
         self.n_instances     = n_instances  # n_epochs: number of separate transitions / instances
+        self.reward_style = reward_style # Should we get reward style based on states or matches
+        self.match_probability = match_probability
 
         assert_valid_transition(all_transitions)
 
@@ -157,7 +159,12 @@ class RMABSimulator(gym.Env):
         return self.observe(), reward, done, {}
 
     def get_reward(self):
-        return np.sum(self.states)
+        if self.reward_style == 'state':
+            return np.sum(self.states)
+        elif self.reward_style == 'match':
+            num_active = np.sum(self.states)
+            prob_all_inactive = (1-self.match_probability)**num_active 
+            return 1-prob_all_inactive
 
 def random_transition(all_population, n_states, n_actions):
     all_transitions = np.random.random((all_population, n_states, n_actions, n_states))

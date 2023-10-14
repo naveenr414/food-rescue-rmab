@@ -2,3 +2,6 @@
 rmab.egg-info
 rmab/secret.py
 rmab/__pycache__/
+figures/
+results/
+runs/
