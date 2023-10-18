@@ -64,6 +64,11 @@ class RMABSimulator(gym.Env):
             for ep in range(n_episodes):
                 self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size)
 
+        # TODO: Remove this, for debugging 
+        print("Last cohort {}".format(self.cohort_selection[-1]))
+        print("Transitions {}".format(all_transitions[self.cohort_selection[-1]]))
+        self.last_transitions = all_transitions[self.cohort_selection[-1]]
+
     def reset_all(self):
         self.instance_count = -1
 

@@ -4,6 +4,7 @@ import glob
 import json 
 import os 
 import secrets
+from scipy.stats import norm
 
 def get_save_path(folder_name,result_name,seed,use_date=False):
     """Create a string, file_name, which is the name of the file to save
@@ -143,7 +144,7 @@ def get_valid_lcb_ucb(arm_p_lcb, arm_p_ucb):
     return arm_p_lcb, arm_p_ucb
 
 
-def get_ucb_conf(cum_prob, n_pulls, t, alpha, episode_count, delta=1e-3):
+def get_ucb_conf(cum_prob, n_pulls, t, alpha, episode_count, delta=1e-3,norm_confidence=False):
     """ calculate transition probability estimates """
     n_arms, n_states, n_actions = n_pulls.shape
 
@@ -153,9 +154,13 @@ def get_ucb_conf(cum_prob, n_pulls, t, alpha, episode_count, delta=1e-3):
         est_p               = cum_prob / n_pulls_at_least_1
         est_p[n_pulls == 0] = 1 / n_states  # where division by 0
 
-        conf_p = np.sqrt( 2 * n_states * np.log( 2 * n_states * n_actions * n_arms * ((episode_count+1)**4 / delta) ) / n_pulls_at_least_1 )
+        if norm_confidence:
+            z_score = norm.ppf(1-delta/2)
+            conf_p = z_score*np.sqrt(est_p*(1-est_p)/n_pulls_at_least_1) 
+        else: 
+            conf_p = np.sqrt( 2 * n_states * np.log( 2 * n_states * n_actions * n_arms * ((episode_count+1)**4 / delta) ) / n_pulls_at_least_1 )
         conf_p[n_pulls == 0] = 1
-        conf_p[conf_p > 1]   = 1  # keep within valid range
+        conf_p[conf_p > 1]   = 1  # keep within valid range 
 
     # if VERBOSE: print('conf', np.round(conf_p.flatten(), 2))
     # if VERBOSE: print('est p', np.round(est_p.flatten(), 2))

@@ -124,6 +124,119 @@ def UCWhittle_value(env, n_episodes, n_epochs, discount, alpha, VERBOSE=False):
 
     return all_reward
 
+def UCWhittle_value_fixed(env, n_episodes, n_epochs, discount, alpha, VERBOSE=False):
+    """
+    value-based UCWhittle
+    discount = discount factor
+    alpha = for confidence radius """
+    N           = env.cohort_size
+    n_states    = env.number_states
+    n_actions   = env.all_transitions.shape[2]
+    budget      = env.budget
+    T           = env.episode_len * n_episodes
+    episode_len = env.episode_len
+
+    env.reset_all()
+
+    print(f'solving UCWhittle using method: VALUE-BASED')
+
+    memoizer_p_s = Memoizer(method='p_s')
+    memoizer_lcb_ucb_s_lamb = Memoizer(method='lcb_ucb_s_lamb')
+
+    all_reward = np.zeros((n_epochs, T + 1))
+
+    for epoch in range(n_epochs):
+        if epoch != 0: env.reset_instance()
+
+        n_pulls  = np.zeros((N, n_states, n_actions))  # number of pulls
+        cum_prob = np.zeros((N, n_states, n_actions))  # transition probability estimates for going to ENGAGING state
+
+        print('first state', env.observe())
+        all_reward[epoch, 0] = env.get_reward()
+
+        t = 1  # total timestep across all episodes
+        lamb_val = 0 # initialize subsidy for acting to 0
+        for episode in range(n_episodes):
+
+            ####################################################
+            # run each episode
+            ####################################################
+
+            for l in range(episode_len):
+                ####################################################
+                # precompute
+                ####################################################
+
+                est_p, conf_p = get_ucb_conf(cum_prob, n_pulls, t, alpha, env.episode_count)
+
+                # compute value for each arm, for each state
+                opt_values, opt_p = QP_value_step(est_p, conf_p, discount, lamb_val, budget, memoizer_lcb_ucb_s_lamb)
+
+                ####################################################
+                # solve value iteration to get WI, using opt values
+                ####################################################
+
+                state = env.observe()
+
+                # compute whittle index for each arm
+                state_WI = np.zeros(N)
+                top_WI   = []
+                min_chosen_subsidy = 0
+                for i in range(N):
+                    arm_transitions = opt_p[i, state[i], :, :]
+                    # memoize to speed up
+                    check_set_val = memoizer_p_s.check_set(arm_transitions, state[i])
+                    if check_set_val != -1:
+                        state_WI[i] = check_set_val
+                    else:
+                        state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, subsidy_break=min_chosen_subsidy)
+                        memoizer_p_s.add_set(arm_transitions, state[i], state_WI[i])
+
+                    if len(top_WI) < budget:
+                        heapq.heappush(top_WI, (state_WI[i], i))
+                    else:
+                        # add state_WI to heap
+                        heapq.heappushpop(top_WI, (state_WI[i], i))
+                        min_chosen_subsidy = top_WI[0][0]  # smallest-valued item
+
+                ####################################################
+                # determine action and act
+                ####################################################
+
+                # get action corresponding to optimal subsidy
+                # pull K highest indices
+                sorted_WI = np.argsort(state_WI)[::-1]
+
+                action = np.zeros(N, dtype=np.int8)
+                action[sorted_WI[:budget]] = 1
+
+                # execute chosen policy; observe reward and next state
+                next_state, reward, done, _ = env.step(action)
+
+                if done and t < T: env.reset()
+
+                # update estimates
+                for i in range(N):
+                    s = state[i] 
+                    a = action[i] 
+
+                    n_pulls[i, s, a] += 1
+                    if next_state[i] == 1:
+                        cum_prob[i, s, a] += 1
+
+                # print(epoch, t, ' | a ', action, ' | s\' ', next_state, ' | r ', reward, '   | Q_active ', np.round(Q_active[:, state], 3), ' | Q_passive ', np.round(Q_passive, 3), ' | WI ', np.round(state_WI, 3))
+                if t % 100 == 0:
+                    print('---------------------------------------------------')
+                    print(epoch, t, ' | a ', action, ' | s\' ', next_state, ' | r ', reward, '   | WI ', np.round(state_WI, 3))
+
+                all_reward[epoch, t] = reward
+                lamb_val = min_chosen_subsidy  # update lambda value used
+
+                t += 1
+
+    return all_reward
+
+
 
 
 def QP_value_step(est_p, conf_p, discount, lamb_val, budget, memoizer_lcb_ucb_s_lamb):

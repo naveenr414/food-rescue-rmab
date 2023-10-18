@@ -69,11 +69,85 @@ def UCWhittle(env, n_episodes, n_epochs, discount, alpha, method='QP', VERBOSE=F
 
             # update estimates
             for i in range(N):
+                # TODO: Change this back to normal; trying to see if this fixes
+                # The transition issues
+
                 for s in range(n_states): # pick states with B largest WI
                     a = action[s]
+
+                # s = state[i] 
+                # a = action[i] 
+
                     n_pulls[i, s, a] += 1
                     if next_state[i] == 1:
                         cum_prob[i, s, a] += 1
+
+            # print(epoch, t, ' | a ', action, ' | s\' ', next_state, ' | r ', reward, '   | Q_active ', np.round(Q_active[:, state], 3), ' | Q_passive ', np.round(Q_passive, 3), ' | WI ', np.round(state_WI, 3))
+            if t % 100 == 0:
+                print('---------------------------------------------------')
+                print(epoch, t, ' | a ', action, ' | s\' ', next_state, ' | r ', reward, '   | WI ', np.round(state_WI, 3))
+
+            all_reward[epoch, t] = reward
+
+    return all_reward
+
+def UCWhittleFixed(env, n_episodes, n_epochs, discount, alpha, method='QP', VERBOSE=False,norm_confidence=False):
+    """
+    discount = discount factor
+    alpha = for confidence radius """
+    N         = env.cohort_size
+    n_states  = env.number_states
+    n_actions = env.all_transitions.shape[2]
+    budget    = env.budget
+    T         = env.episode_len * n_episodes
+
+    env.reset_all()
+
+    print(f'solving UCWhittle using method: {method}')
+
+    all_reward = np.zeros((n_epochs, T + 1))
+
+    memoizer = Memoizer(method)
+
+    for epoch in range(n_epochs):
+        if epoch != 0: env.reset_instance()
+
+        n_pulls  = np.zeros((N, n_states, n_actions))  # number of pulls
+        cum_prob = np.zeros((N, n_states, n_actions))  # transition probability estimates for going to ENGAGING state
+
+        print('first state', env.observe())
+        all_reward[epoch, 0] = env.get_reward()
+
+        for t in range(1, T + 1):
+            state = env.observe()
+
+            est_p, conf_p = get_ucb_conf(cum_prob, n_pulls, t, alpha, env.episode_count,norm_confidence=norm_confidence)
+
+            # TODO: use complements for transition probabilities? w.r.t. (action, s' = {0, 1})
+            # idea: we want to be optimistic about next state being ENGAGING (and then the complement for NE)
+
+            if method == 'QP':         # quadratic constraint program (QCP)
+                action, state_WI = QP_step(est_p, conf_p, state, discount, budget, memoizer)
+            elif method == 'QP-min':         # quadratic constraint program (QCP) with minimizing lambda
+                action, state_WI = QP_step(est_p, conf_p, state, discount, budget, memoizer, approach='min')
+            elif method == 'extreme':  # extreme points
+                action, state_WI = extreme_points_step(est_p, conf_p, state, discount, budget, memoizer)
+            elif method == 'UCB':      # only UCB estimates
+                action, state_WI = UCB_step(est_p, conf_p, state, discount, budget, memoizer)
+
+            # execute chosen policy; observe reward and next state
+            next_state, reward, done, _ = env.step(action)
+
+            if done and t < T: env.reset()
+
+            # update estimates
+            for i in range(N):
+                s = state[i] 
+                a = action[i] 
+
+                n_pulls[i, s, a] += 1
+                if next_state[i] == 1:
+                    cum_prob[i, s, a] += 1
 
             # print(epoch, t, ' | a ', action, ' | s\' ', next_state, ' | r ', reward, '   | Q_active ', np.round(Q_active[:, state], 3), ' | Q_passive ', np.round(Q_passive, 3), ' | WI ', np.round(state_WI, 3))
             if t % 100 == 0:
