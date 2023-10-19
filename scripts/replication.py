@@ -193,5 +193,3 @@ save_path = get_save_path('replication',save_name,seed,use_date=False)
 delete_duplicate_results('replication',save_name,data)
 
 json.dump(data,open('../results/'+save_path,'w'))
-
-

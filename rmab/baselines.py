@@ -71,6 +71,77 @@ def optimal_policy(env, n_episodes, n_epochs, discount):
 
     return all_reward
 
+def get_stationary_distribution(P):
+    """Given a Markov Chain, P, get its stationary distribution
+    
+    Arguments:
+        P: Square numpy array representing transition probabilities
+    
+    Returns: Vector of stationary probabilities"""
+
+    eigenvalues, eigenvectors = np.linalg.eig(P.T)  # Transpose P to find left eigenvectors
+
+    # Find the index of the eigenvalue equal to 1
+    stationary_index = np.where(np.isclose(eigenvalues, 1))[0][0]
+
+    # Get the corresponding left eigenvector
+    stationary_distribution = np.real(eigenvectors[:, stationary_index])
+    stationary_distribution /= np.sum(stationary_distribution)  # Normalize to ensure it sums to 1
+
+    return stationary_distribution
+
+def optimal_match_policy(env, n_episodes, n_epochs, discount):
+    """Compute the policy for matching based on stationary 
+        distributions; basically, only notify top-k each time
+    Arguments
+        env: RMAB simulator
+        n_episodes: Integer, number of episodes
+        n_epochs: Integer, number of epochs
+        discount: Float, gamma
+    Returns: Rewards for each epoch/episode"""
+    N         = env.cohort_size
+    n_states  = env.number_states
+    n_actions = env.all_transitions.shape[2]
+    budget    = env.budget
+    T         = env.episode_len * n_episodes
+
+    env.reset_all()
+
+    memoizer = Memoizer('optimal')
+
+    all_reward = np.zeros((n_epochs, T + 1))
+
+    for epoch in range(n_epochs):
+        if epoch != 0: env.reset_instance()
+        true_transitions = env.transitions
+
+        stationary_distros = [get_stationary_distribution(i[1]) for i in true_transitions]
+        chance_in_1 = [(prob[1],i) for i,prob in enumerate(stationary_distros)]
+        chance_in_1 = sorted(chance_in_1)
+        chance_in_1 = chance_in_1[-budget:]
+        indices = [i[1] for i in chance_in_1]
+        
+        print('first state', env.observe())
+        all_reward[epoch, 0] = env.get_reward()
+
+        for t in range(1, T + 1):
+            state = env.observe()
+
+            # select optimal action based on known transition probabilities
+            # compute whittle index for each arm
+
+            action = np.zeros(N, dtype=np.int8)
+            action[indices] = 1
+
+            next_state, reward, done, _ = env.step(action)
+
+            if done and t < T: env.reset()
+
+            all_reward[epoch, t] = reward
+
+    return all_reward
+
+
 
 def random_policy(env, n_episodes, n_epochs):
     """ random action each timestep """

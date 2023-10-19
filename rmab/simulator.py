@@ -54,6 +54,7 @@ class RMABSimulator(gym.Env):
         self.instance_count = 0
         self.episode_count  = 0
         self.timestep       = 0
+        self.total_active = 0
 
         # track indices of cohort members
         self.cohort_selection  = np.zeros((n_instances, cohort_size)).astype(int)
@@ -64,13 +65,9 @@ class RMABSimulator(gym.Env):
             for ep in range(n_episodes):
                 self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size)
 
-        # TODO: Remove this, for debugging 
-        print("Last cohort {}".format(self.cohort_selection[-1]))
-        print("Transitions {}".format(all_transitions[self.cohort_selection[-1]]))
-        self.last_transitions = all_transitions[self.cohort_selection[-1]]
-
     def reset_all(self):
         self.instance_count = -1
+        self.total_active = 0
 
         return self.reset_instance()
 
@@ -156,18 +153,22 @@ class RMABSimulator(gym.Env):
         self.states = next_states.astype(int)
         self.timestep += 1
 
-        reward = self.get_reward()
+        reward = self.get_reward(action)
         done = self.is_terminal()
 
         # print(f'  action {action}, sum {action.sum()}, reward {reward}')
 
         return self.observe(), reward, done, {}
 
-    def get_reward(self):
+    def get_reward(self,action=None):
         if self.reward_style == 'state':
             return np.sum(self.states)
         elif self.reward_style == 'match':
-            num_active = np.sum(self.states)
+            if action is None:
+                return 0
+            num_active = np.sum(self.states*action)
+            self.total_active += np.sum(self.states)
+
             prob_all_inactive = (1-self.match_probability)**num_active 
             return 1-prob_all_inactive
 
