@@ -2,9 +2,9 @@
 
 for seed in 42 43 44
 do
-    tmux new-session -d -s seed_${seed}
-    tmux send-keys -t seed_${seed} ENTER 
-    tmux send-keys -t seed_${seed} "conda activate food; python matching_bandit.py --seed ${seed} --match_prob 0.5 --save_name results | tee ../runs/matching_seed_${seed}.txt" ENTER
+    tmux new-session -d -s match_${seed}
+    tmux send-keys -t match_${seed} ENTER 
+    tmux send-keys -t match_${seed} "conda activate food; python matching_bandit.py --seed ${seed} --match_prob 0.5 --save_name results | tee ../runs/matching_seed_${seed}.txt" ENTER
 done 
 
 # # Impact of parameter p

@@ -213,23 +213,22 @@ def NormPlusMatch(env, n_episodes, n_epochs, discount, alpha, method='QP', VERBO
 
             stationary_distros = [get_stationary_distribution(i[:,1,:]) for i in max_p]
             chance_in_1 = [(prob[1],i) for i,prob in enumerate(stationary_distros)]
-            chance_in_1 = sorted(chance_in_1)
-            chance_in_1 = chance_in_1[-budget:]
-            indices_match = [i[1] for i in chance_in_1]
-            indices_whittle = [i for i in range(len(action)) if action[i] == 1]
 
-            indices_combined = []
-            
-            if random.random() < lamb: 
-                indices_combined = indices_match 
-            else:
-                indices_combined = indices_whittle 
+            matching_values = [i[0] for i in chance_in_1] 
+            whittle_values = state_WI 
 
-            # for i in range(len(indices_match)):
-            #     if random.random()<lamb:
-            #         indices_combined.append(indices_match[i])
-            #     else:
-            #         indices_combined.append(indices_whittle[i])
+            matching_values = np.array(matching_values)
+            whittle_values = np.array(whittle_values )
+
+            matching_values = np.clip(matching_values,0,None)
+            whittle_values = np.clip(whittle_values,0,None)
+            matching_values /= np.max(matching_values)
+            whittle_values /= np.max(whittle_values)
+
+            matching_values *= lamb 
+
+            values_combined = matching_values + whittle_values 
+            indices_combined = np.argsort(values_combined)[-budget:]
 
             action_match = np.zeros(N,dtype=np.int8)
             action_match[np.array(indices_combined)] = 1

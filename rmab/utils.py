@@ -151,8 +151,9 @@ def get_ucb_conf(cum_prob, n_pulls, t, alpha, episode_count, delta=1e-3,norm_con
     with np.errstate(divide='ignore'):
         n_pulls_at_least_1 = np.copy(n_pulls)
         n_pulls_at_least_1[n_pulls == 0] = 1
-        est_p               = cum_prob / n_pulls_at_least_1
-        est_p[n_pulls == 0] = 1 / n_states  # where division by 0
+        est_p               = (cum_prob+1) / (n_pulls_at_least_1+n_states)
+        # est_p               = (cum_prob) / (n_pulls_at_least_1)
+        # est_p[n_pulls == 0] = 1 / n_states  # where division by 0
 
         if norm_confidence:
             z_score = norm.ppf(1-delta/2)
@@ -166,3 +167,31 @@ def get_ucb_conf(cum_prob, n_pulls, t, alpha, episode_count, delta=1e-3,norm_con
     # if VERBOSE: print('est p', np.round(est_p.flatten(), 2))
 
     return est_p, conf_p
+
+def is_pareto_optimal(point, data):
+    """Determine if a data point is pareto optimal
+    
+    Arguments:
+        point: Numpy Array (x,y)
+        data: List of Numpy Arrays of x,y
+    
+    Returns: Boolean; is the data point pareto optimal"""
+
+    for other_point in data:
+        if point[0] < other_point[0] and point[1] < other_point[1]:
+            return False
+    return True
+
+def filter_pareto_optimal(data):
+    """Reduce a list of numpy pairs to only the pareto optimal points
+    
+    Arguments:
+        data: List of numpy arrays (x,y)
+    
+    Returns: List of numpy arrays (x,y)"""
+
+    pareto_optimal_points = []
+    for point in data:
+        if is_pareto_optimal(point, data):
+            pareto_optimal_points.append(point)
+    return pareto_optimal_points
