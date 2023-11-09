@@ -17,7 +17,7 @@ To compare UC Whittle vs. Normal-distribution performance for an indvidual confi
 ```
 python better_bandit.py --seed 42 --dataset synthetic --n_arms 8 --save_name normal --use_date
 ```
-Doing so will compare bandit algorithms for 8 arms, saving it as `results/better_bandit/normal_42_{date}.json`` 
+Doing so will compare bandit algorithms for 8 arms, saving it as `results/better_bandit/normal_42_{date}.json` 
 
 To do this for matching algorithms and compare match rate, run 
 ```

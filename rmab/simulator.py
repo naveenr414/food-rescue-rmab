@@ -144,6 +144,8 @@ class RMABSimulator(gym.Env):
         assert len(action) == self.cohort_size
         assert np.sum(action) <= self.budget
 
+        reward = self.get_reward(action)
+
         next_states = np.zeros(self.cohort_size)
         for i in range(self.cohort_size):
             prob = self.transitions[i, self.states[i], action[i], :]
@@ -153,7 +155,6 @@ class RMABSimulator(gym.Env):
         self.states = next_states.astype(int)
         self.timestep += 1
 
-        reward = self.get_reward(action)
         done = self.is_terminal()
 
         # print(f'  action {action}, sum {action.sum()}, reward {reward}')

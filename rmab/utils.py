@@ -4,7 +4,27 @@ import glob
 import json 
 import os 
 import secrets
-from scipy.stats import norm
+from scipy.stats import norm, beta
+import scipy.stats as st
+
+def get_stationary_distribution(P):
+    """Given a Markov Chain, P, get its stationary distribution
+    
+    Arguments:
+        P: Square numpy array representing transition probabilities
+    
+    Returns: Vector of stationary probabilities"""
+
+    eigenvalues, eigenvectors = np.linalg.eig(P.T)  # Transpose P to find left eigenvectors
+
+    # Find the index of the eigenvalue equal to 1
+    stationary_index = np.where(np.isclose(eigenvalues, 1))[0][0]
+
+    # Get the corresponding left eigenvector
+    stationary_distribution = np.real(eigenvectors[:, stationary_index])
+    stationary_distribution /= np.sum(stationary_distribution)  # Normalize to ensure it sums to 1
+
+    return stationary_distribution
 
 def get_save_path(folder_name,result_name,seed,use_date=False):
     """Create a string, file_name, which is the name of the file to save
@@ -144,22 +164,42 @@ def get_valid_lcb_ucb(arm_p_lcb, arm_p_ucb):
     return arm_p_lcb, arm_p_ucb
 
 
-def get_ucb_conf(cum_prob, n_pulls, t, alpha, episode_count, delta=1e-3,norm_confidence=False):
+def get_ucb_conf(cum_prob, n_pulls, t, alpha, episode_count, delta=1e-4,norm_confidence=False):
     """ calculate transition probability estimates """
     n_arms, n_states, n_actions = n_pulls.shape
 
     with np.errstate(divide='ignore'):
         n_pulls_at_least_1 = np.copy(n_pulls)
         n_pulls_at_least_1[n_pulls == 0] = 1
-        est_p               = (cum_prob+1) / (n_pulls_at_least_1+n_states)
-        # est_p               = (cum_prob) / (n_pulls_at_least_1)
-        # est_p[n_pulls == 0] = 1 / n_states  # where division by 0
+        est_p               = (cum_prob) / (n_pulls_at_least_1)
+        est_p[n_pulls == 0] = 1 / n_states  # where division by 0
 
         if norm_confidence:
-            z_score = norm.ppf(1-delta/2)
-            conf_p = z_score*np.sqrt(est_p*(1-est_p)/n_pulls_at_least_1) 
+            p_hat = cum_prob / n_pulls_at_least_1
+            z = st.norm.ppf(1 - delta / 2)
+            denominator = 1 + z**2 / n_pulls_at_least_1
+            center = (p_hat + z**2 / (2 * n_pulls_at_least_1)) / denominator
+            conf_p = z * (p_hat * (1 - p_hat) / n_pulls_at_least_1 + z**2 / (4 * n_pulls_at_least_1**2))**0.5 / denominator
+
+            # alpha = 1+cum_prob 
+            # b = 1+n_pulls_at_least_1-cum_prob 
+
+            # lower_bound = beta.ppf(delta/2,alpha,b)
+            # upper_bound = beta.ppf(1-delta/2,alpha,b)
+
+            # lower_bound = np.clip(lower_bound,0,1)
+            # upper_bound = np.clip(upper_bound,0,1)
+
+            # est_p = (alpha-1)/(alpha+b-2)
+            # est_p[n_pulls == 0] = 1/n_states 
+            # conf_p = np.maximum(np.abs(est_p-lower_bound),np.abs(upper_bound-est_p))            
+
+            # z_score = norm.ppf(1-delta/2)
+            # conf_p = z_score*np.sqrt((est_p+0.5)*(n_pulls_at_least_1-n_pulls_at_least_1*est_p+0.5)/((n_pulls_at_least_1*n_pulls_at_least_1)*(n_pulls_at_least_1+1)))
         else: 
             conf_p = np.sqrt( 2 * n_states * np.log( 2 * n_states * n_actions * n_arms * ((episode_count+1)**4 / delta) ) / n_pulls_at_least_1 )
+        
+        # conf_p[n_pulls < 5] = 0.5
         conf_p[n_pulls == 0] = 1
         conf_p[conf_p > 1]   = 1  # keep within valid range 
 

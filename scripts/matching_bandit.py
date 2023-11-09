@@ -23,9 +23,9 @@ import argparse
 import sys
 
 from rmab.simulator import RMABSimulator, random_valid_transition, random_valid_transition_round_down, synthetic_transition_small_window
-from rmab.uc_whittle import UCWhittle, UCWhittleFixed, UCWhittleMatch, NormPlusMatch
+from rmab.uc_whittle import UCWhittle, UCWhittleFixed, UCWhittleMatch, NStepMatch, UCWhittlePerfectMatch
 from rmab.ucw_value import UCWhittle_value
-from rmab.baselines import optimal_policy, random_policy, WIQL, optimal_match_policy
+from rmab.baselines import optimal_policy, random_policy, optimal_match_slow_policy
 from rmab.fr_dynamics import get_all_transitions
 from rmab.utils import get_save_path, delete_duplicate_results
 
@@ -35,7 +35,7 @@ is_jupyter = 'ipykernel' in sys.modules
 # +
 if is_jupyter: 
     seed        = 42
-    n_arms      = 8
+    n_arms      = 4
     budget      = 3
     discount    = 0.9
     alpha       = 3 
@@ -98,28 +98,8 @@ random_active_rate = simulator.total_active/(random_rewards.size * n_arms)
 
 np.random.seed(seed)
 random.seed(seed)
-optimal_match_reward = optimal_match_policy(simulator, n_episodes, n_epochs, discount)
-optimal_match_active_rate = simulator.total_active/(optimal_match_reward.size*n_arms)
-
-np.random.seed(seed)
-random.seed(seed)
 optimal_reward = optimal_policy(simulator, n_episodes, n_epochs, discount)
 optimal_active_rate = simulator.total_active/(optimal_reward.size*n_arms)
-
-np.random.seed(seed)
-random.seed(seed)
-wiql_rewards = WIQL(simulator, n_episodes, n_epochs)
-wiql_active_rate = simulator.total_active/(wiql_rewards.size*n_arms)
-
-np.random.seed(seed)
-random.seed(seed)
-ucw_extreme_rewards = UCWhittle(simulator, n_episodes, n_epochs, discount, alpha=alpha, method='extreme')
-ucw_extreme_active_rate = simulator.total_active/(ucw_extreme_rewards.size*n_arms)
-
-np.random.seed(seed)
-random.seed(seed)
-ucw_ucb_rewards = UCWhittle(simulator, n_episodes, n_epochs, discount, alpha=alpha, method='UCB')
-ucw_ucb_active_rate = simulator.total_active/(ucw_ucb_rewards.size*n_arms)
 
 np.random.seed(seed)
 random.seed(seed)
@@ -133,47 +113,81 @@ ucw_with_norm_active_rate = simulator.total_active/(rewards_with_norm.size*n_arm
 
 np.random.seed(seed)
 random.seed(seed)
-rewards_match_heuristic = UCWhittleMatch(simulator, n_episodes, n_epochs, discount, alpha=alpha, method='UCB')
-match_heuristic_active_rate = simulator.total_active/(rewards_match_heuristic.size*n_arms)
+whittle_approximate_rewards = optimal_policy(simulator, n_episodes, n_epochs, discount,use_match_reward=True)
+whittle_approximate_active_rate = simulator.total_active/(whittle_approximate_rewards.size*n_arms)
+np.mean(whittle_approximate_rewards)
 
 np.random.seed(seed)
 random.seed(seed)
-rewards_combined = NormPlusMatch(simulator, n_episodes, n_epochs, discount, alpha=alpha, method='UCB',lamb=0.25)
-combined_active_rate = simulator.total_active/(rewards_combined.size*n_arms)
+ucw_perfect_rewards = UCWhittlePerfectMatch(simulator, n_episodes, n_epochs, discount, alpha=alpha, method='UCB',delta=1e-4)
+ucw_perfect_active_rate = simulator.total_active/(ucw_perfect_rewards.size*n_arms)
+np.mean(ucw_perfect_rewards)
+
+
+np.random.seed(seed)
+random.seed(seed)
+ucw_match_rewards = UCWhittleMatch(simulator, n_episodes, n_epochs, discount, alpha=alpha, method='UCB',delta=1e-4)
+ucw_match_active_rate = simulator.total_active/(ucw_match_rewards.size*n_arms)
+np.mean(ucw_match_rewards)
+
+
+np.random.seed(seed)
+random.seed(seed)
+zero_step_rewards = NStepMatch(simulator, n_episodes, n_epochs, discount, alpha=alpha,n_step=0, method='UCB')
+zero_step_active_rate = simulator.total_active/(zero_step_rewards.size*n_arms)
+
+np.random.seed(seed)
+random.seed(seed)
+one_step_rewards = NStepMatch(simulator, n_episodes, n_epochs, discount, alpha=alpha,n_step=1, method='UCB')
+one_step_active_rate = simulator.total_active/(one_step_rewards.size*n_arms)
+
+np.random.seed(seed)
+random.seed(seed)
+infinite_step_rewards = NStepMatch(simulator, n_episodes, n_epochs, discount, alpha=alpha,n_step=-1, method='UCB')
+infinite_step_active_rate = simulator.total_active/(infinite_step_rewards.size*n_arms)
 
 mean_rewards = {'random_rewards': np.mean(random_rewards), 
  'optimal_rewards': np.mean(optimal_reward), 
- 'optimal_match_rewards': np.mean(optimal_match_reward),
- 'wiql_rewards': np.mean(wiql_rewards), 
- 'extreme_rewards': np.mean(ucw_extreme_rewards), 
- 'ucb_rewards': np.mean(ucw_ucb_rewards), 
  'fixed_rewards': np.mean(rewards_without_norm), 
  'norm_rewards': np.mean(rewards_with_norm), 
- 'predicted_optimal_match_rewards': np.mean(rewards_match_heuristic), 
- 'combined_rewards': np.mean(rewards_combined)}
+ 'zero_step_rewards': np.mean(zero_step_rewards),
+ 'one_step_rewards': np.mean(one_step_rewards),
+ 'infinite_step_rewards': np.mean(infinite_step_rewards),
+  'ucw_match_rewards': np.mean(ucw_match_rewards), 
+ 'ucw_perfect_rewards': np.mean(ucw_perfect_rewards), 
+'whittle_approximate_rewards': np.mean(whittle_approximate_rewards),}
 
-active_rates = {'random_rewards': random_active_rate, 
- 'optimal_rewards': optimal_active_rate, 
- 'optimal_match_rewards': optimal_match_active_rate,
- 'wiql_rewards': wiql_active_rate, 
- 'extreme_rewards': ucw_extreme_active_rate, 
- 'ucb_rewards': ucw_ucb_active_rate, 
- 'fixed_rewards': ucw_without_norm_active_rate, 
- 'norm_rewards': ucw_with_norm_active_rate, 
- 'predicted_optimal_match_rewards': match_heuristic_active_rate, 
- 'combined_rewards': combined_active_rate}
-
-mean_rewards 
+active_rates = {'random_rewards': np.mean(random_active_rate), 
+ 'optimal_rewards': np.mean(optimal_active_rate), 
+ 'fixed_rewards': np.mean(ucw_without_norm_active_rate), 
+ 'norm_rewards': np.mean(ucw_with_norm_active_rate), 
+ 'zero_step_rewards': np.mean(zero_step_active_rate),
+ 'one_step_rewards': np.mean(one_step_active_rate),
+ 'infinite_step_rewards': np.mean(infinite_step_active_rate),
+  'ucw_match_rewards': np.mean(ucw_match_active_rate), 
+  'ucw_perfect_rewards': np.mean(ucw_perfect_active_rate),
+  'whittle_approximate_rewards': np.mean(whittle_approximate_active_rate)}
 
 std_rewards = {'random_rewards': np.std(random_rewards), 
  'optimal_rewards': np.std(optimal_reward), 
- 'optimal_match_reward': np.mean(optimal_match_reward), 
- 'wiql_rewards': np.std(wiql_rewards), 
- 'extreme_rewards': np.std(ucw_extreme_rewards), 
- 'ucb_rewards': np.std(ucw_ucb_rewards), 
  'fixed_rewards': np.std(rewards_without_norm), 
  'norm_rewards': np.std(rewards_with_norm), 
- 'predicted_optimal_match_rewards': np.std(rewards_match_heuristic)}
+ 'zero_step_rewards': np.std(zero_step_rewards),
+ 'one_step_rewards': np.std(one_step_rewards),
+ 'infinite_step_rewards': np.std(infinite_step_rewards),
+  'ucw_match_rewards': np.std(ucw_match_rewards), 
+  'ucw_perfect_rewards': np.std(ucw_perfect_rewards),
+  'whittle_approximate_rewards': np.std(whittle_approximate_rewards)}
+
+if n_arms <= 6:
+    np.random.seed(seed)
+    random.seed(seed)
+    optimal_match_rewards = optimal_match_slow_policy(simulator, n_episodes, n_epochs, discount)
+    optimal_match_active_rate = simulator.total_active/(optimal_match_rewards.size*n_arms)
+
+    mean_rewards['optimal_match_rewards'] = np.mean(optimal_match_rewards)
+    active_rates['optimal_match_rewards'] = np.mean(optimal_match_active_rate)
+    std_rewards['optimal_match_rewards'] = np.std(optimal_match_rewards)
 
 data = {
     'mean_reward': mean_rewards, 

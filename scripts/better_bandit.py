@@ -25,7 +25,7 @@ from scipy.stats import norm
 
 # +
 from rmab.simulator import RMABSimulator, random_valid_transition, random_valid_transition_round_down, synthetic_transition_small_window
-from rmab.uc_whittle import UCWhittle, UCWhittleFixed, QP_step,UCB_step
+from rmab.uc_whittle import UCWhittle, UCWhittleFixed, UCWhittlePerfect, QP_step,UCB_step
 from rmab.utils import Memoizer, get_ucb_conf
 
 from rmab.ucw_value import UCWhittle_value, UCWhittle_value_fixed
@@ -109,10 +109,23 @@ rewards_without_norm = UCWhittleFixed(simulator, n_episodes, n_epochs, discount,
 np.random.seed(seed)
 random.seed(seed)
 rewards_with_norm = UCWhittleFixed(simulator, n_episodes, n_epochs, discount, alpha=alpha, method='UCB',norm_confidence=True)
+np.mean(rewards_with_norm)
+
+np.random.seed(seed)
+random.seed(seed)
+perfect_rewards = UCWhittlePerfect(simulator, n_episodes, n_epochs, discount, alpha=alpha, method='UCB',norm_confidence=True)
+np.mean(perfect_rewards)
+
+np.random.seed(seed)
+random.seed(seed)
+optimal_reward = optimal_policy(simulator, n_episodes, n_epochs, discount)
+np.mean(optimal_reward)
 
 data = {
     'mean_reward_baseline': np.mean(rewards_without_norm), 
     'mean_reward_norm': np.mean(rewards_with_norm), 
+    'mean_reward_perfect': np.mean(perfect_rewards),
+    'mean_optimal_reward': np.mean(optimal_reward),
     'parameters': 
         {'seed'      : seed,
         'n_arms'    : n_arms,
@@ -130,3 +143,5 @@ save_path = get_save_path('better_bandit',save_name,seed,use_date=save_with_date
 delete_duplicate_results('better_bandit',save_name,data)
 
 json.dump(data,open('../results/'+save_path,'w'))
+
+
