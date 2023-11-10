@@ -8,6 +8,9 @@ POSSIBLE OPTIMIZATIONS TO HELP SPEED
 import numpy as np
 from itertools import product, combinations
 from rmab.utils import binary_to_decimal, list_to_binary
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 
 import heapq  # priority queue
@@ -153,6 +156,210 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, match_pro
         difference = np.abs(orig_value_func - value_func)
 
     return Q_func 
+
+class QNetwork(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(QNetwork, self).__init__()
+        self.fc1 = nn.Linear(input_size, 24)
+        self.fc2 = nn.Linear(24, 24)
+        self.fc3 = nn.Linear(24, output_size)
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+def arm_value_iteration_neural(all_transitions, discount, budget, match_prob, threshold=value_iteration_threshold,reward_function='matching',lamb=0):
+    """ value iteration for a single arm at a time
+
+    value iteration for the MDP defined by transitions with lambda-adjusted reward function
+    return action corresponding to pi^*(s_I)
+
+    Arguments:
+        all_transitions: N x num_states x num_actions (presumably 2) x num_states
+        discount: Gamma, float
+        match_prob: Float, match probability for each arm
+
+    Returns: Q_func, numpy matrix with Q values for each combination of states, 
+        and each combination of actions
+        This is encoded as a 2^N x 2^N matrix, where a state is encoded in binary
+    """
+    assert discount < 1
+    n_arms, _ = all_transitions.shape[0], all_transitions.shape[2]
+    num_real_states = 2**(n_arms)
+    p = match_prob 
+    
+    def reward_activity(s,a):
+        return torch.pow(s)
+
+    def reward_matching(s,a):
+        return (1-torch.pow(1-p,s.dot(a)))
+        
+    def reward_combined(s,a):
+        if torch.sum(a) > budget:
+            return -10000
+
+        return (1-torch.pow(1-p,s.dot(a))) + lamb*torch.sum(s)
+
+    if reward_function == 'activity':
+        r = reward_activity
+    elif reward_function == 'matching':
+        r = reward_matching 
+    elif reward_function == 'combined': 
+        r = reward_combined 
+    else:
+        raise Exception("{} reward function not found".format(reward_function))
+
+    input_size = n_arms
+    output_size = 2**n_arms
+    q_network = QNetwork(input_size, output_size)
+
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+
+
+    q_network = q_network.to(device)
+
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(q_network.parameters(), lr=0.001)
+
+    num_episodes = 500
+
+    for episode in range(num_episodes):
+        state = torch.randint(0, 2, (n_arms,), dtype=torch.float32) 
+        total_reward = 0
+        done = False
+
+        trials = 50 
+        for trial in range(trials):
+            state = state.to(device)
+            # Choose an action using epsilon-greedy policy
+            if np.random.rand() < 0.05:
+                action = [1 for i in range(budget)] + [0 for i in range(n_arms-budget)]
+                binary_action = binary_to_decimal(action)
+                np.random.shuffle(action)
+                action = torch.Tensor(action).to(device)
+            else:
+                q_values = q_network(state)
+                binary_action = torch.argmax(q_values).item()
+                binary_val = bin(binary_action)[2:].zfill(n_arms)
+                action = np.zeros(n_arms, dtype=np.int8)
+                action = torch.Tensor(np.array([int(i) for i in binary_val])).to(device)
+
+
+            # Simulate the environment
+            next_state = []
+
+            for i in range(n_arms):
+                current_state = state[i] 
+                one_probability = all_transitions[i][int(current_state.item())][int(action[i].item())][1]
+                next_state.append(int(np.random.random()<one_probability))
+
+            next_state = torch.Tensor(np.array(next_state))
+            reward = r(state,action)
+
+            # Compute the target Q-value using the Q-learning formula
+            with torch.no_grad():
+                target_q_values = q_network(next_state.to(device))
+                target_q_value = reward + discount * torch.max(target_q_values)
+                target_q_value = target_q_value.to(device)
+
+            # Compute the loss and perform a gradient descent step
+            optimizer.zero_grad()
+            current_q_values = q_network(state)
+            loss = criterion(current_q_values[binary_action], target_q_value)
+            loss.backward()
+            optimizer.step()
+
+            state = next_state
+
+    return q_network 
+
+
+
+def arm_value_iteration_approximate(all_transitions, discount, budget, match_prob, threshold=value_iteration_threshold,reward_function='matching',lamb=0,arm_num=0):
+    """ value iteration for a single arm at a time
+
+    value iteration for the MDP defined by transitions with lambda-adjusted reward function
+    return action corresponding to pi^*(s_I)
+
+    Arguments:
+        all_transitions: N x num_states x num_actions (presumably 2) x num_states
+        discount: Gamma, float
+        match_prob: Float, match probability for each arm
+
+    Returns: Q_func, numpy matrix with Q values for each combination of states, 
+        and each combination of actions
+        This is encoded as a 2^N x 2^N matrix, where a state is encoded in binary
+    """
+    assert discount < 1
+    n_arms,n_states, n_actions,_ = all_transitions.shape
+    num_actions = 2**(n_arms)
+    value_func = np.random.rand(n_arms,n_arms+1)
+    difference = np.ones((n_arms,num_actions,budget+1,n_arms+1))
+    iters = 0
+    p = match_prob 
+        
+    all_a = list(combinations(range(n_arms), budget))
+    all_a = [np.array(list_to_binary(i,n_arms)) for i in all_a]
+
+    def reward_difference(s,a,A,S,T):
+        return (np.power(1-p,S-s*a)-np.power(1-p,S) + s)    
+
+    # Perform Q Iteration 
+    while np.max(difference) >= threshold:
+        iters += 1
+        orig_value_func = np.copy(value_func)
+
+        Q_func = np.zeros((n_states, 2,num_actions,budget+1,n_arms+1))
+        for s in range(n_states):
+            for q,a in enumerate(all_a):
+                a_rep = binary_to_decimal(a)
+                action = np.array(a)
+
+                num_by_S_T = {}
+                tot_by_S_T = {}
+                num_pathways = 50
+                for i in range(num_pathways):
+                    other_states = [np.random.randint(0,2) for i in range(n_arms)]
+                    other_states[arm_num] = s
+
+                    S = np.dot(other_states,action)
+                    T = int(np.round(sum([all_transitions[k][other_states[k]][action[k]][1] for k in range(n_arms)])))
+                    reward = reward_difference(s,action[arm_num],action,S,T)
+
+
+                    if (S,T) not in tot_by_S_T:
+                        tot_by_S_T[(S,T)] = 0
+                        num_by_S_T[(S,T)] = 1
+                    
+                    num_by_S_T[(S,T)] += 1
+                    tot_by_S_T[(S,T)] += reward 
+
+
+                    for s_prime in range(n_states):
+                        for T_prime in range(n_arms+1):
+                            s_prime_prob = all_transitions[arm_num][s][action[arm_num]][s_prime]
+                            T_prime_prob = T**(T_prime)*np.exp(-T)/(np.math.factorial(T_prime))
+
+
+                            tot_by_S_T[(S,T)] += discount*s_prime_prob*T_prime_prob*value_func[s_prime,T_prime] 
+
+                for (S,T) in num_by_S_T:    
+                    Q_func[s,action[arm_num],a_rep,S,T] = tot_by_S_T[(S,T)]/num_by_S_T[(S,T)] 
+
+                
+
+            for T in range(n_arms+1):
+                value_func[s,T] = np.max(Q_func[s,:,:,:,T])
+        difference = np.abs(orig_value_func - value_func)
+
+    return Q_func 
+
 
 def get_init_bounds(transitions):
     lb = -1
