@@ -32,7 +32,6 @@ from rmab.utils import get_save_path, delete_duplicate_results
 
 is_jupyter = 'ipykernel' in sys.modules
 
-# +
 if is_jupyter: 
     seed        = 42
     n_arms      = 8
@@ -69,9 +68,6 @@ else:
     n_epochs    = args.n_epochs
     save_name   = args.save_name 
     save_with_date = args.use_date 
-
-
-# -
 
 n_states = 2
 n_actions = 2

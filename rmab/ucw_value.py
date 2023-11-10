@@ -13,7 +13,7 @@ from gurobipy import GRB
 from rmab.compute_whittle import arm_compute_whittle
 from rmab.utils import Memoizer, get_valid_lcb_ucb, get_ucb_conf
 
-def UCWhittle_value(env, n_episodes, n_epochs, discount, alpha, VERBOSE=False):
+def UCWhittle_value_buggy(env, n_episodes, n_epochs, discount, alpha, VERBOSE=False):
     """
     value-based UCWhittle
     discount = discount factor
@@ -124,7 +124,7 @@ def UCWhittle_value(env, n_episodes, n_epochs, discount, alpha, VERBOSE=False):
 
     return all_reward
 
-def UCWhittle_value_fixed(env, n_episodes, n_epochs, discount, alpha, VERBOSE=False):
+def UCWhittle_value(env, n_episodes, n_epochs, discount, alpha, VERBOSE=False):
     """
     value-based UCWhittle
     discount = discount factor

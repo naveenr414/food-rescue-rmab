@@ -5,11 +5,9 @@ POSSIBLE OPTIMIZATIONS TO HELP SPEED
 - keep track of top k WIs so far. then in future during binary search, if we go below that WI just quit immediately
 """
 
-import sys
 import numpy as np
-import scipy.misc
 from itertools import product, combinations
-import time 
+from rmab.utils import binary_to_decimal, list_to_binary
 
 
 import heapq  # priority queue
@@ -17,7 +15,7 @@ import heapq  # priority queue
 whittle_threshold = 1e-4
 value_iteration_threshold = 1e-2
 
-def arm_value_iteration(transitions, state, lamb_val, discount, threshold=value_iteration_threshold,use_match_reward=False):
+def arm_value_iteration(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0):
     """ value iteration for a single arm at a time
 
     value iteration for the MDP defined by transitions with lambda-adjusted reward function
@@ -32,10 +30,13 @@ def arm_value_iteration(transitions, state, lamb_val, discount, threshold=value_
 
     # lambda-adjusted reward function
     def reward(s, a):
-        return s - a * lamb_val
+        return s - a * predicted_subsidy
 
     def reward_matching(s,a):
-        return s*a - a*lamb_val 
+        return s*a - a*predicted_subsidy 
+
+    def combined_reward(s,a):
+        return s*a + lamb*s - a*predicted_subsidy 
 
     while np.max(difference) >= threshold:
         iters += 1
@@ -44,14 +45,16 @@ def arm_value_iteration(transitions, state, lamb_val, discount, threshold=value_
         # calculate Q-function
         Q_func = np.zeros((n_states, n_actions))
         for s in range(n_states):
-            Q_val_s0 = 0
-            Q_val_s1 = 0
             for a in range(n_actions):
-                r = reward 
-
-                if use_match_reward:
-                    r = reward_matching
-
+                if reward_function == 'activity':
+                    r = reward  
+                elif reward_function == 'matching':
+                    r = reward_matching 
+                elif reward_function == 'combined':
+                    r = combined_reward
+                else:
+                    raise Exception("Reward function {} not found".format(reward_function))
+                     
                 # transitioning to state = 0
                 Q_func[s, a] += (1 - transitions[s, a]) * (r(s, a) + discount * value_func[0])
 
@@ -65,72 +68,7 @@ def arm_value_iteration(transitions, state, lamb_val, discount, threshold=value_
     # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
     return np.argmax(Q_func[state, :])
 
-
-def get_init_bounds(transitions):
-    lb = -1
-    ub = 1
-    return lb, ub
-
-
-def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,use_match_reward=False):
-    """
-    compute whittle index for a single arm using binary search
-
-    subsidy_break = the min value at which we stop iterating
-
-    param transitions:
-    param eps: epsilon convergence
-    returns Whittle index
-    """
-    lb, ub = get_init_bounds(transitions) # return lower and upper bounds on WI
-    top_WI = []
-    while abs(ub - lb) > eps:
-        lamb_val = (lb + ub) / 2
-        # print('lamb', lamb_val, lb, ub)
-
-        # we've already filled our knapsack with higher-valued WIs
-        if ub < subsidy_break:
-            # print('breaking early!', subsidy_break, lb, ub)
-            return -10
-
-        action = arm_value_iteration(transitions, state, lamb_val, discount,use_match_reward=use_match_reward)
-        if action == 0:
-            # optimal action is passive: subsidy is too high
-            ub = lamb_val
-        elif action == 1:
-            # optimal action is active: subsidy is too low
-            lb = lamb_val
-        else:
-            raise Error(f'action not binary: {action}')
-    subsidy = (ub + lb) / 2
-    return subsidy
-
-def binary_to_decimal(binary_list):
-    """Turn 0-1 lists into a number, for state representation
-    
-    Arguments:
-        binary_list: List of 0,1
-    
-    Returns: Integer base-10 represnetation"""
-
-    decimal_value = 0
-    for bit in binary_list:
-        decimal_value = decimal_value * 2 + bit
-    return decimal_value
-
-def list_to_binary(a,n_arms):
-    """Given a list of the form [0,3,5], return a binary
-        array of length n_arms with 1 if i is in a, 0 otherwise
-        For example, [1,0,0,1,0,1]
-    
-    Arguments: a, numpy array or list
-        n_arms: Integer, length of the return list
-    
-    Returns: 0-1 List of length n_arms"""
-
-    return np.array([1 if i in a else 0 for i in range(n_arms)])
-
-def arm_value_iteration_match(all_transitions, discount, budget, match_prob, threshold=value_iteration_threshold,lamb=0):
+def arm_value_iteration_exponential(all_transitions, discount, budget, match_prob, threshold=value_iteration_threshold,reward_function='matching',lamb=0):
     """ value iteration for a single arm at a time
 
     value iteration for the MDP defined by transitions with lambda-adjusted reward function
@@ -159,8 +97,23 @@ def arm_value_iteration_match(all_transitions, discount, budget, match_prob, thr
     all_a = list(combinations(range(n_arms), budget))
     all_a = [np.array(list_to_binary(i,n_arms)) for i in all_a]
 
+    def reward_activity(s,a):
+        return np.sum(s)
+
     def reward_matching(s,a):
+        return (1-np.power(1-p,s.dot(a)))
+        
+    def reward_combined(s,a):
         return (1-np.power(1-p,s.dot(a))) + lamb*np.sum(s)
+
+    if reward_function == 'activity':
+        r = reward_activity
+    elif reward_function == 'matching':
+        r = reward_matching 
+    elif reward_function == 'combined': 
+        r = reward_combined 
+    else:
+        raise Exception("{} reward function not found".format(reward_function))
 
     # Precompute transition probabilities for speed 
     precomputed_transition_probabilities = np.zeros((num_real_states,num_real_states,num_real_states))
@@ -194,9 +147,47 @@ def arm_value_iteration_match(all_transitions, discount, budget, match_prob, thr
 
                 for s_prime in all_s:
                     s_prime_rep = binary_to_decimal(s_prime)
-                    Q_func[s_rep,a_rep] += precomputed_transition_probabilities[s_rep,a_rep,s_prime_rep] * (reward_matching(s,a)
+                    Q_func[s_rep,a_rep] += precomputed_transition_probabilities[s_rep,a_rep,s_prime_rep] * (r(s,a)
                          + discount * value_func[s_prime_rep])
             value_func[s_rep] = np.max(Q_func[s_rep, :])
         difference = np.abs(orig_value_func - value_func)
 
     return Q_func 
+
+def get_init_bounds(transitions):
+    lb = -1
+    ub = 1
+    return lb, ub
+
+def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0):
+    """
+    compute whittle index for a single arm using binary search
+
+    subsidy_break = the min value at which we stop iterating
+
+    param transitions:
+    param eps: epsilon convergence
+    returns Whittle index
+    """
+    lb, ub = get_init_bounds(transitions) # return lower and upper bounds on WI
+    top_WI = []
+    while abs(ub - lb) > eps:
+        predicted_subsidy = (lb + ub) / 2
+        # print('lamb', lamb_val, lb, ub)
+
+        # we've already filled our knapsack with higher-valued WIs
+        if ub < subsidy_break:
+            # print('breaking early!', subsidy_break, lb, ub)
+            return -10
+
+        action = arm_value_iteration(transitions, state, predicted_subsidy, discount,reward_function=reward_function,lamb=lamb)
+        if action == 0:
+            # optimal action is passive: subsidy is too high
+            ub = predicted_subsidy
+        elif action == 1:
+            # optimal action is active: subsidy is too low
+            lb = predicted_subsidy
+        else:
+            raise Error(f'action not binary: {action}')
+    subsidy = (ub + lb) / 2
+    return subsidy

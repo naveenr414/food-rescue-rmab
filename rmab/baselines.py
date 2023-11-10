@@ -1,71 +1,22 @@
-""" baseline algorithms """
+""" Oracle algorithms for matching, activity """
 
 import numpy as np
-import random
 import heapq
 
-from rmab.simulator import RMABSimulator, random_valid_transition
 from rmab.uc_whittle import Memoizer
-from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_match, binary_to_decimal
+from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, binary_to_decimal
 from rmab.utils import get_stationary_distribution
 
-def approximate_match_whittle(env, n_episodes, n_epochs, discount,use_match_reward=False):
-    def solve_gamma_2(T,gamma,s):
-        a = T[0,0,0]
-        b = T[0,0,1]
-        c = T[0,1,0]
-        d = T[0,1,1]
-        e = T[1,0,0]
-        f = T[1,0,1]
-        g = T[1,1,0]
-        h = T[1,1,1]
-
-        if s == 0:
-            top = gamma*(-b+d+b*c*gamma-a*d*gamma)
-            bottom = (1-a*gamma-b*gamma+d*gamma-h*gamma+b*c*gamma**2-a*d*gamma**2-b*g*gamma**2+a*h*gamma**2)
-
-            return top/bottom 
-        else: 
-            top = -1+c*gamma+f*gamma+d*e*gamma**2-c*f*gamma**2
-            top*=-1 
-            bottom = 1-c*gamma-e*gamma-f*gamma+g*gamma-d*e*gamma**2+c*f*gamma**2-f*g*gamma**2+e*h*gamma**2
-
-            return top/bottom 
-
-    N         = env.cohort_size
-    n_states  = env.number_states
-    n_actions = env.all_transitions.shape[2]
-    budget    = env.budget
-    T         = env.episode_len * n_episodes
-
-    env.reset_all()
-
-    all_reward = np.zeros((n_epochs, T))
-
-    for epoch in range(n_epochs):
-        if epoch != 0: env.reset_instance()
-         
-        print('first state', env.observe())
-
-        for t in range(0, T):
-            state = env.observe()
-
-            # select optimal action based on known transition probabilities
-            # compute whittle index for each arm
-
-            indices = [(i,solve_gamma_2(env.transitions[i],discount,state[i])) for i in range(N)]
-            indices = sorted(indices,key=lambda k: k[1],reverse=True)[:budget]
-            indices = [i[0] for i in indices]
-            action = np.zeros(N, dtype=np.int8)
-            action[indices] = 1
-            _, reward, done, _ = env.step(action)
-            if done and t+1 < T: env.reset()
-            all_reward[epoch, t] = reward
-
-    return all_reward
-
-def optimal_policy(env, n_episodes, n_epochs, discount,use_match_reward=False,lamb=0):
-    """ optimal policy based on true transition probabilities """
+def optimal_whittle(env, n_episodes, n_epochs, discount,reward_function='activity',lamb=0):
+    """Whittle index policy based on computing the subsidy for each arm
+    This approximates the problem as the sum of Linear rewards, then 
+    Decomposes the problem into the problem for each arm individually
+    
+    reward_function: String, either
+        activity: Maximize the total activity, s_i 
+        matching: Maximize the total number of matches, s_i*a_i 
+        combined: Maximize s_i*a_i + \lambda s_i
+    lamb: Float, hyperparameter for the combined matching """
     N         = env.cohort_size
     n_states  = env.number_states
     n_actions = env.all_transitions.shape[2]
@@ -100,7 +51,7 @@ def optimal_policy(env, n_episodes, n_epochs, discount,use_match_reward=False,la
                 if check_set_val != -1:
                     state_WI[i] = check_set_val
                 else:
-                    state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,use_match_reward=use_match_reward)
+                    state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb)
                     memoizer.add_set(arm_transitions, state[i], state_WI[i])
 
                 if len(top_WI) < budget:
@@ -117,13 +68,61 @@ def optimal_policy(env, n_episodes, n_epochs, discount,use_match_reward=False,la
             action = np.zeros(N, dtype=np.int8)
             action[sorted_WI[:budget]] = 1
 
-            next_state, reward, done, _ = env.step(action)
+            _, reward, done, _ = env.step(action)
 
             if done and t+1 < T: env.reset()
 
             all_reward[epoch, t] = reward
 
     return all_reward
+
+def optimal_q_iteration(env, n_episodes, n_epochs, discount,reward_function='matching',lamb=0):
+    """Q-iteration to solve which arms to pull
+        Doesn't decompose the arms, but can achieve higher performance
+        Is quite slow 
+
+    More details in arm_value_iteration_match function
+     """
+    N         = env.cohort_size
+    n_states  = env.number_states
+    n_actions = env.all_transitions.shape[2]
+    budget    = env.budget
+    T         = env.episode_len * n_episodes
+    match_prob = env.match_probability
+
+    env.reset_all()
+
+    all_reward = np.zeros((n_epochs, T))
+
+    for epoch in range(n_epochs):
+        if epoch != 0: env.reset_instance()
+        true_transitions = env.transitions
+
+        print('first state', env.observe())
+
+        Q_vals = arm_value_iteration_exponential(true_transitions,discount,budget,match_prob,reward_function=reward_function,lamb=lamb)
+
+        for t in range(0, T):
+            state = env.observe()
+            state_rep = binary_to_decimal(state)
+
+            max_action = np.argmax(Q_vals[state_rep])
+            binary_val = bin(max_action)[2:].zfill(N)
+
+            action = np.zeros(N, dtype=np.int8)
+            action = np.array([int(i) for i in binary_val])
+
+            assert np.sum(action) == budget 
+
+            next_state, reward, done, _ = env.step(action)
+
+            if done and t+1 < T: env.reset()
+
+            all_reward[epoch, t] = reward
+
+
+    return all_reward
+
 
 def random_policy(env, n_episodes, n_epochs):
     """ random action each timestep """
@@ -227,55 +226,6 @@ def WIQL(env, n_episodes, n_epochs):
                     lamb_vals[i, s] = Q_vals[i, s, 1] - Q_vals[i, s, 0]
 
             all_reward[epoch, t] = reward
-
-    return all_reward
-
-def optimal_match_slow_policy(env, n_episodes, n_epochs, discount,lamb=0):
-    """ optimal policy based on true transition probabilities
-    
-    We run Q-iteration on the full combinations of states 
-    Hence this runs quite slowly, but provides a good upper bound
-    For matching performance
-
-    More details in arm_value_iteration_match function
-     """
-    N         = env.cohort_size
-    n_states  = env.number_states
-    n_actions = env.all_transitions.shape[2]
-    budget    = env.budget
-    T         = env.episode_len * n_episodes
-    match_prob = env.match_probability
-
-    env.reset_all()
-
-    all_reward = np.zeros((n_epochs, T))
-
-    for epoch in range(n_epochs):
-        if epoch != 0: env.reset_instance()
-        true_transitions = env.transitions
-
-        print('first state', env.observe())
-
-        Q_vals = arm_value_iteration_match(true_transitions,discount,budget,match_prob,lamb=lamb)
-
-        for t in range(0, T):
-            state = env.observe()
-            state_rep = binary_to_decimal(state)
-
-            max_action = np.argmax(Q_vals[state_rep])
-            binary_val = bin(max_action)[2:].zfill(N)
-
-            action = np.zeros(N, dtype=np.int8)
-            action = np.array([int(i) for i in binary_val])
-
-            assert np.sum(action) == budget 
-
-            next_state, reward, done, _ = env.step(action)
-
-            if done and t+1 < T: env.reset()
-
-            all_reward[epoch, t] = reward
-
 
     return all_reward
 

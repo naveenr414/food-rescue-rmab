@@ -235,3 +235,28 @@ def filter_pareto_optimal(data):
         if is_pareto_optimal(point, data):
             pareto_optimal_points.append(point)
     return pareto_optimal_points
+
+def binary_to_decimal(binary_list):
+    """Turn 0-1 lists into a number, for state representation
+    
+    Arguments:
+        binary_list: List of 0,1
+    
+    Returns: Integer base-10 represnetation"""
+
+    decimal_value = 0
+    for bit in binary_list:
+        decimal_value = decimal_value * 2 + bit
+    return decimal_value
+
+def list_to_binary(a,n_arms):
+    """Given a list of the form [0,3,5], return a binary
+        array of length n_arms with 1 if i is in a, 0 otherwise
+        For example, [1,0,0,1,0,1]
+    
+    Arguments: a, numpy array or list
+        n_arms: Integer, length of the return list
+    
+    Returns: 0-1 List of length n_arms"""
+
+    return np.array([1 if i in a else 0 for i in range(n_arms)])
