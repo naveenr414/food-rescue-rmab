@@ -4,7 +4,7 @@ import numpy as np
 import heapq
 
 from rmab.uc_whittle import Memoizer
-from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_iteration_approximate, arm_value_iteration_neural
+from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_iteration_approximate, arm_value_iteration_neural, arm_compute_whittle_sufficient
 from rmab.utils import get_stationary_distribution, binary_to_decimal, list_to_binary
 from itertools import combinations
 
@@ -128,6 +128,76 @@ def optimal_q_iteration(env, n_episodes, n_epochs, discount,reward_function='mat
 
 
     return all_reward
+
+def optimal_whittle_sufficient(env, n_episodes, n_epochs, discount,reward_function='activity',lamb=0):
+    """Whittle index policy based on computing the subsidy for each arm
+    This approximates the problem as the sum of Linear rewards, then 
+    Decomposes the problem into the problem for each arm individually
+    
+    reward_function: String, either
+        activity: Maximize the total activity, s_i 
+        matching: Maximize the total number of matches, s_i*a_i 
+        combined: Maximize s_i*a_i + \lambda s_i
+    lamb: Float, hyperparameter for the combined matching """
+    N         = env.cohort_size
+    n_states  = env.number_states
+    n_actions = env.all_transitions.shape[2]
+    budget    = env.budget
+    T         = env.episode_len * n_episodes
+
+    env.reset_all()
+
+    memoizer = Memoizer('optimal')
+
+    all_reward = np.zeros((n_epochs, T))
+
+    for epoch in range(n_epochs):
+        if epoch != 0: env.reset_instance()
+        true_transitions = env.transitions
+
+        print('first state', env.observe())
+
+        for t in range(0, T):
+            state = env.observe()
+            T_stat = np.sum(state)
+
+            # select optimal action based on known transition probabilities
+            # compute whittle index for each arm
+            state_WI = np.zeros(N)
+            top_WI = []
+            min_chosen_subsidy = -1 #0
+            for i in range(N):
+                arm_transitions = true_transitions[i, :, :, 1]
+
+                # memoize to speed up
+                check_set_val = memoizer.check_set(arm_transitions, str(state[i])+ ' '+str(T_stat))
+                if check_set_val != -1:
+                    state_WI[i] = check_set_val
+                else:
+                    state_WI[i] = arm_compute_whittle_sufficient(arm_transitions, state[i], T_stat,discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb)
+                    memoizer.add_set(arm_transitions, str(state[i])+' '+str(T_stat), state_WI[i])
+
+                if len(top_WI) < budget:
+                    heapq.heappush(top_WI, (state_WI[i], i))
+                else:
+                    # add state_WI to heap
+                    heapq.heappushpop(top_WI, (state_WI[i], i))
+                    min_chosen_subsidy = top_WI[0][0]  # smallest-valued item
+
+            # pull K highest indices
+            sorted_WI = np.argsort(state_WI)[::-1]
+
+            action = np.zeros(N, dtype=np.int8)
+            action[sorted_WI[:budget]] = 1
+
+            _, reward, done, _ = env.step(action)
+
+            if done and t+1 < T: env.reset()
+
+            all_reward[epoch, t] = reward
+
+    return all_reward
+
 
 def optimal_neural_q_iteration(env, n_episodes, n_epochs, discount,reward_function='matching',lamb=0):
     """Q-iteration to solve which arms to pull

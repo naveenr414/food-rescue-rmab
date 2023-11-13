@@ -11,6 +11,7 @@ from rmab.utils import binary_to_decimal, list_to_binary
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from scipy.stats import binom
 
 
 import heapq  # priority queue
@@ -156,6 +157,89 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, match_pro
         difference = np.abs(orig_value_func - value_func)
 
     return Q_func 
+
+def arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0):
+    """ value iteration for a single arm at a time
+
+    value iteration for the MDP defined by transitions with lambda-adjusted reward function
+    return action corresponding to pi^*(s_I)
+    """
+    assert discount < 1
+
+    n_states, n_actions = transitions.shape
+    n_arms = 4 # TODO: Change this so it's a parameter
+    budget = 3 # TODO: Change this later, so it's a parameter
+    p = 0.5 # TODO: Change this later so it's a parameter
+
+    value_func = np.random.rand(n_arms+1,n_states)
+    difference = np.ones((n_states))
+    iters = 0
+
+    # lambda-adjusted reward function
+    def reward(T,s, a):
+        return s - a * predicted_subsidy
+
+    def reward_matching(T,s,a):
+        return s*a - a*predicted_subsidy 
+
+    def combined_reward(T,s,a):
+        if T>0 and a == s == 1:
+            T = min(T,budget)
+            return (1-np.power(1-p,T)-(1-np.power(1-p,T-1))) + lamb*s - a*predicted_subsidy 
+        else:
+            return s*a + lamb*s - a*predicted_subsidy 
+
+    binom_pmfs = [binom.pmf(a,n_arms,0.3) for a in range(n_arms+1)]
+
+    while np.max(difference) >= threshold:
+        iters += 1
+        orig_value_func = np.copy(value_func)
+
+        # calculate Q-function
+        Q_func = np.zeros((n_arms+1,n_states, n_actions))
+
+        weights = np.random.rand(n_arms+1)
+        weights /= weights.sum()
+
+
+        for T in range(n_arms+1):
+            for s in range(n_states):
+                for a in range(n_actions):
+                    if reward_function == 'activity':
+                        r = reward  
+                    elif reward_function == 'matching':
+                        r = reward_matching 
+                    elif reward_function == 'combined':
+                        r = combined_reward
+                    else:
+                        raise Exception("Reward function {} not found".format(reward_function))
+                        
+
+                    for s_prime in range(n_states):
+                        if s_prime == 0:
+                            p_s = 1-transitions[s,a]
+                        else:
+                            p_s = transitions[s,a]
+
+                        for T_prime in range(n_arms+1):
+                            # p_T = T**(T_prime)*np.exp(-T)/(np.math.factorial(T_prime)) # Poisson(T)  
+                            # if s_prime > T_prime:
+                            #     p_T = 0
+                            # else:                           
+                            #     p_T = (T-s)**(T_prime-s_prime)*np.exp(-(T-s))/(np.math.factorial(T_prime-s_prime)) # Poisson(T)                             
+                            # p_T = weights[T_prime]
+                            #p_T = 1/(n_arms+1)
+                            #p_T = 2**(T_prime)*np.exp(-2)/(np.math.factorial(T_prime))
+                            p_T = binom_pmfs[T_prime]
+                            
+                            Q_func[T,s, a] += p_s*p_T * (r(T,s, a) + discount * value_func[T,s_prime])
+
+                value_func[T,s] = np.max(Q_func[T,s, :])
+
+        difference = np.abs(orig_value_func - value_func)
+
+    # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
+    return np.argmax(Q_func[T_stat,state, :])
 
 class QNetwork(nn.Module):
     def __init__(self, input_size, output_size):
@@ -308,7 +392,10 @@ def arm_value_iteration_approximate(all_transitions, discount, budget, match_pro
     all_a = [np.array(list_to_binary(i,n_arms)) for i in all_a]
 
     def reward_difference(s,a,A,S,T):
-        return (np.power(1-p,S-s*a)-np.power(1-p,S) + s)    
+        if S > 1:
+            return ((1-np.power(1-p,s*a))/np.sqrt(S) + lamb*s) 
+        else:
+            return (1-np.power(1-p,s*a) + lamb*s)   
 
     # Perform Q Iteration 
     while np.max(difference) >= threshold:
@@ -325,7 +412,7 @@ def arm_value_iteration_approximate(all_transitions, discount, budget, match_pro
                 tot_by_S_T = {}
                 num_pathways = 50
                 for i in range(num_pathways):
-                    other_states = [np.random.randint(0,2) for i in range(n_arms)]
+                    other_states = np.random.randint(0,2,n_arms)
                     other_states[arm_num] = s
 
                     S = np.dot(other_states,action)
@@ -361,10 +448,44 @@ def arm_value_iteration_approximate(all_transitions, discount, budget, match_pro
     return Q_func 
 
 
-def get_init_bounds(transitions):
-    lb = -1
-    ub = 1
+def get_init_bounds(transitions,lamb=0):
+    lamb = max(lamb,1)+1
+    lb = -lamb
+    ub = lamb
     return lb, ub
+
+def arm_compute_whittle_sufficient(transitions, state, T_stat,discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0):
+    """
+    compute whittle index for a single arm using binary search
+
+    subsidy_break = the min value at which we stop iterating
+
+    param transitions:
+    param eps: epsilon convergence
+    returns Whittle index
+    """
+    lb, ub = get_init_bounds(transitions,lamb) # return lower and upper bounds on WI
+    top_WI = []
+    while abs(ub - lb) > eps:
+        predicted_subsidy = (lb + ub) / 2
+        # print('lamb', lamb_val, lb, ub)
+
+        # we've already filled our knapsack with higher-valued WIs
+        if ub < subsidy_break:
+            # print('breaking early!', subsidy_break, lb, ub)
+            return -10
+
+        action = arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy, discount,reward_function=reward_function,lamb=lamb)
+        if action == 0:
+            # optimal action is passive: subsidy is too high
+            ub = predicted_subsidy
+        elif action == 1:
+            # optimal action is active: subsidy is too low
+            lb = predicted_subsidy
+        else:
+            raise Error(f'action not binary: {action}')
+    subsidy = (ub + lb) / 2
+    return subsidy
 
 def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0):
     """
@@ -376,7 +497,7 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
     param eps: epsilon convergence
     returns Whittle index
     """
-    lb, ub = get_init_bounds(transitions) # return lower and upper bounds on WI
+    lb, ub = get_init_bounds(transitions,lamb) # return lower and upper bounds on WI
     top_WI = []
     while abs(ub - lb) > eps:
         predicted_subsidy = (lb + ub) / 2
