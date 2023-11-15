@@ -89,6 +89,7 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, match_pro
     """
     assert discount < 1
     n_arms, _ = all_transitions.shape[0], all_transitions.shape[2]
+    
     num_real_states = 2**(n_arms)
     value_func = np.random.rand(num_real_states)
     difference = np.ones((num_real_states))
@@ -158,7 +159,7 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, match_pro
 
     return Q_func 
 
-def arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0):
+def arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy, discount, n_arms,match_prob,budget,threshold=value_iteration_threshold,reward_function='activity',lamb=0,probs=[]):
     """ value iteration for a single arm at a time
 
     value iteration for the MDP defined by transitions with lambda-adjusted reward function
@@ -167,9 +168,7 @@ def arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy,
     assert discount < 1
 
     n_states, n_actions = transitions.shape
-    n_arms = 4 # TODO: Change this so it's a parameter
-    budget = 3 # TODO: Change this later, so it's a parameter
-    p = 0.5 # TODO: Change this later so it's a parameter
+    p = match_prob
 
     value_func = np.random.rand(n_arms+1,n_states)
     difference = np.ones((n_states))
@@ -184,12 +183,34 @@ def arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy,
 
     def combined_reward(T,s,a):
         if T>0 and a == s == 1:
+            orig_T = T
             T = min(T,budget)
-            return (1-np.power(1-p,T)-(1-np.power(1-p,T-1))) + lamb*s - a*predicted_subsidy 
+            return (1-np.power(1-p,T))/orig_T + lamb*s - a*predicted_subsidy 
+            # return (1-np.power(1-p,T) - (1-np.power(1-p,T-1))) + lamb*s - a*predicted_subsidy
+        elif T == 0 and a==s==1:
+            return 0
         else:
             return s*a + lamb*s - a*predicted_subsidy 
 
-    binom_pmfs = [binom.pmf(a,n_arms,0.3) for a in range(n_arms+1)]
+    # binom_pmfs = [1,1,1,1,1,1,1]
+    # binom_pmfs = np.array(binom_pmfs)/np.sum(binom_pmfs)
+    # binom_pmfs = np.array([binom.pmf(i,n_arms,0.5) for i in range(n_arms+1)])
+    # binom_pmfs /= np.sum(binom_pmfs)
+
+    p_0_transition = 0.3
+    p_1_transition = 0.7
+
+    a_0 = [binom.pmf(i,n_arms-budget,p_0_transition) for i in range(n_arms-budget+1)]
+    a_1 = [binom.pmf(i,budget,p_1_transition) for i in range(budget+1)]
+
+    binom_pmfs = [0 for i in range(n_arms+1)]
+
+    for i in range(len(a_0)):
+        for j in range(len(a_1)):
+            binom_pmfs[i+j] += a_0[i]*a_1[j]
+    
+    binom_pmfs = np.array(binom_pmfs)/np.sum(binom_pmfs)
+    
 
     while np.max(difference) >= threshold:
         iters += 1
@@ -228,11 +249,10 @@ def arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy,
                             # else:                           
                             #     p_T = (T-s)**(T_prime-s_prime)*np.exp(-(T-s))/(np.math.factorial(T_prime-s_prime)) # Poisson(T)                             
                             # p_T = weights[T_prime]
-                            #p_T = 1/(n_arms+1)
+                            # p_T = 1/(n_arms+1)
                             #p_T = 2**(T_prime)*np.exp(-2)/(np.math.factorial(T_prime))
-                            p_T = binom_pmfs[T_prime]
-                            
-                            Q_func[T,s, a] += p_s*p_T * (r(T,s, a) + discount * value_func[T,s_prime])
+                            p_T = binom_pmfs[T_prime]                            
+                            Q_func[T,s, a] += p_s*p_T * (r(T,s, a) + discount * value_func[T_prime,s_prime])
 
                 value_func[T,s] = np.max(Q_func[T,s, :])
 
@@ -363,98 +383,13 @@ def arm_value_iteration_neural(all_transitions, discount, budget, match_prob, th
 
     return q_network 
 
-
-
-def arm_value_iteration_approximate(all_transitions, discount, budget, match_prob, threshold=value_iteration_threshold,reward_function='matching',lamb=0,arm_num=0):
-    """ value iteration for a single arm at a time
-
-    value iteration for the MDP defined by transitions with lambda-adjusted reward function
-    return action corresponding to pi^*(s_I)
-
-    Arguments:
-        all_transitions: N x num_states x num_actions (presumably 2) x num_states
-        discount: Gamma, float
-        match_prob: Float, match probability for each arm
-
-    Returns: Q_func, numpy matrix with Q values for each combination of states, 
-        and each combination of actions
-        This is encoded as a 2^N x 2^N matrix, where a state is encoded in binary
-    """
-    assert discount < 1
-    n_arms,n_states, n_actions,_ = all_transitions.shape
-    num_actions = 2**(n_arms)
-    value_func = np.random.rand(n_arms,n_arms+1)
-    difference = np.ones((n_arms,num_actions,budget+1,n_arms+1))
-    iters = 0
-    p = match_prob 
-        
-    all_a = list(combinations(range(n_arms), budget))
-    all_a = [np.array(list_to_binary(i,n_arms)) for i in all_a]
-
-    def reward_difference(s,a,A,S,T):
-        if S > 1:
-            return ((1-np.power(1-p,s*a))/np.sqrt(S) + lamb*s) 
-        else:
-            return (1-np.power(1-p,s*a) + lamb*s)   
-
-    # Perform Q Iteration 
-    while np.max(difference) >= threshold:
-        iters += 1
-        orig_value_func = np.copy(value_func)
-
-        Q_func = np.zeros((n_states, 2,num_actions,budget+1,n_arms+1))
-        for s in range(n_states):
-            for q,a in enumerate(all_a):
-                a_rep = binary_to_decimal(a)
-                action = np.array(a)
-
-                num_by_S_T = {}
-                tot_by_S_T = {}
-                num_pathways = 50
-                for i in range(num_pathways):
-                    other_states = np.random.randint(0,2,n_arms)
-                    other_states[arm_num] = s
-
-                    S = np.dot(other_states,action)
-                    T = int(np.round(sum([all_transitions[k][other_states[k]][action[k]][1] for k in range(n_arms)])))
-                    reward = reward_difference(s,action[arm_num],action,S,T)
-
-
-                    if (S,T) not in tot_by_S_T:
-                        tot_by_S_T[(S,T)] = 0
-                        num_by_S_T[(S,T)] = 1
-                    
-                    num_by_S_T[(S,T)] += 1
-                    tot_by_S_T[(S,T)] += reward 
-
-
-                    for s_prime in range(n_states):
-                        for T_prime in range(n_arms+1):
-                            s_prime_prob = all_transitions[arm_num][s][action[arm_num]][s_prime]
-                            T_prime_prob = T**(T_prime)*np.exp(-T)/(np.math.factorial(T_prime))
-
-
-                            tot_by_S_T[(S,T)] += discount*s_prime_prob*T_prime_prob*value_func[s_prime,T_prime] 
-
-                for (S,T) in num_by_S_T:    
-                    Q_func[s,action[arm_num],a_rep,S,T] = tot_by_S_T[(S,T)]/num_by_S_T[(S,T)] 
-
-                
-
-            for T in range(n_arms+1):
-                value_func[s,T] = np.max(Q_func[s,:,:,:,T])
-        difference = np.abs(orig_value_func - value_func)
-
-    return Q_func 
-
-
 def get_init_bounds(transitions,lamb=0):
     lamb = max(lamb,1)+1
     lb = -lamb
     ub = lamb
     return lb, ub
 
-def arm_compute_whittle_sufficient(transitions, state, T_stat,discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0):
+def arm_compute_whittle_sufficient(transitions, state, T_stat,discount, subsidy_break, n_arms,match_prob,budget,eps=whittle_threshold,reward_function='activity',lamb=0,probs=[]):
     """
     compute whittle index for a single arm using binary search
 
@@ -475,7 +410,7 @@ def arm_compute_whittle_sufficient(transitions, state, T_stat,discount, subsidy_
             # print('breaking early!', subsidy_break, lb, ub)
             return -10
 
-        action = arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy, discount,reward_function=reward_function,lamb=lamb)
+        action = arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy, discount,n_arms,match_prob,budget,reward_function=reward_function,lamb=lamb,probs=probs)
         if action == 0:
             # optimal action is passive: subsidy is too high
             ub = predicted_subsidy

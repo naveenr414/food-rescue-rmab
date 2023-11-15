@@ -12,6 +12,10 @@
 #     name: python3
 # ---
 
+# # Combined Oracle Bandits
+
+# Analyze the performance of various oracle bandits that solve the combined activity and matching task
+
 # %load_ext autoreload
 # %autoreload 2
 
@@ -21,28 +25,27 @@ import matplotlib.pyplot as plt
 import json 
 import argparse 
 import sys
+from openrl.envs.common import make
+from gymnasium.envs.registration import register
 
-from rmab.simulator import RMABSimulator, random_valid_transition, random_valid_transition_round_down, synthetic_transition_small_window
-from rmab.uc_whittle import UCWhittle, UCWhittleFixed, UCWhittleMatch, NormPlusMatch
-from rmab.ucw_value import UCWhittle_value
-from rmab.baselines import optimal_policy, random_policy, WIQL, optimal_match_policy
+from rmab.simulator import RMABSimulator
+from rmab.baselines import optimal_whittle,  optimal_q_iteration, optimal_whittle_sufficient, optimal_neural_q_iteration
 from rmab.fr_dynamics import get_all_transitions
 from rmab.utils import get_save_path, delete_duplicate_results
 
 
 is_jupyter = 'ipykernel' in sys.modules
 
-# +
 if is_jupyter: 
     seed        = 42
-    n_arms      = 8
+    n_arms      = 5
     budget      = 3 
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 30
     episode_len = 20 
     n_epochs    = 10
-    save_name = 'combined_lamb'
+    save_name = 'combined_arms_{}'.format(n_arms)
     match_prob = 0.5
     save_with_date = False 
 else:
@@ -73,9 +76,6 @@ else:
     save_with_date = args.use_date 
     match_prob = args.match_prob 
 
-
-# -
-
 n_states = 2
 n_actions = 2
 
@@ -91,24 +91,102 @@ random.seed(seed)
 simulator = RMABSimulator(all_population_size, all_features, all_transitions,
             n_arms, episode_len, n_epochs, n_episodes, budget, number_states=n_states, reward_style='match',match_probability=match_prob)
 
-rewards_by_lamb = {}
-std_by_lamb = {}
-active_rates_by_lamb = {}
+lamb = 1
 
-for lamb in [0,0.5,0.75,0.9,1,1.1,1.25,1.5,2]:
+import logging
+logging.disable(logging.CRITICAL)
+
+if is_jupyter:
+     np.random.seed(seed)
+     random.seed(seed)
+     register(
+          id="Custom_Env/IdentityEnv", # Fill in the name of the custom environment, it can be freely modified
+          entry_point="rmab.simulator:RMABSimulatorOpenRL", # Fill in the filename and class name of the custom environment
+     )
+     simulator_rl = make(id="Custom_Env/IdentityEnv", agent_num=10,
+     all_population=all_population_size, all_features=all_features, all_transitions=all_transitions,
+               cohort_size=n_arms, episode_len=episode_len, n_instances=n_epochs, n_episodes=n_episodes, budget=budget, number_states=n_states, reward_style='combined',lamb=lamb,match_probability=match_prob)
+     simulator_rl.episode_len = episode_len
+     neural_reward, neural_active_rate = optimal_neural_q_iteration(simulator_rl, budget,match_prob, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+     print(np.mean(neural_reward) + lamb*n_arms*neural_active_rate)
+
+if is_jupyter:
     np.random.seed(seed)
     random.seed(seed)
-    rewards_combined = NormPlusMatch(simulator, n_episodes, n_epochs, discount, alpha=alpha, method='UCB',lamb=lamb)
-    combined_active_rate = simulator.total_active/(rewards_combined.size*n_arms)
+    joint_combined_reward = optimal_q_iteration(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    joint_combined_active_rate = simulator.total_active/(joint_combined_reward.size*n_arms)
+    print(np.mean(joint_combined_reward) + lamb*n_arms*joint_combined_active_rate)
 
-    rewards_by_lamb[lamb] = np.mean(rewards_combined)
-    std_by_lamb[lamb] = np.std(rewards_combined) 
-    active_rates_by_lamb[lamb] = combined_active_rate 
+if is_jupyter:
+    np.random.seed(seed)
+    random.seed(seed)
+    sufficient_reward = optimal_whittle_sufficient(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    sufficient_active_rate = simulator.total_active/(sufficient_reward.size*n_arms)
+    print(np.mean(sufficient_reward)+lamb*n_arms*sufficient_active_rate)
+
+if is_jupyter:
+    np.random.seed(seed)
+    random.seed(seed)
+    approximate_combined_reward = optimal_whittle(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    approximate_combined_active_rate = simulator.total_active/(approximate_combined_reward.size*n_arms)
+    print(np.mean(approximate_combined_reward) + lamb*n_arms*approximate_combined_active_rate)
+
+lamb_list = [0,1,2,4,8,16,32,64] 
+lamb_list = [i/n_arms for i in lamb_list]
+
+
+# +
+approximate_match = []
+approximate_active = []
+
+sufficient_match = []
+sufficient_active = []
+
+neural_match = []
+neural_active = []
+# -
+
+for lamb in lamb_list:
+    np.random.seed(seed)
+    random.seed(seed)
+    approximate_combined_reward = optimal_whittle(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    approximate_combined_active_rate = simulator.total_active/(approximate_combined_reward.size*n_arms)
+
+    approximate_match.append(np.mean(approximate_combined_reward))
+    approximate_active.append(approximate_combined_active_rate)
+
+for lamb in lamb_list:
+    np.random.seed(seed)
+    random.seed(seed)
+    sufficient_reward = optimal_whittle_sufficient(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    sufficient_active_rate = simulator.total_active/(sufficient_reward.size*n_arms)
+
+    sufficient_match.append(np.mean(sufficient_reward))
+    sufficient_active.append(sufficient_active_rate)
+
+for lamb in lamb_list:
+    np.random.seed(seed)
+    random.seed(seed)
+    register(
+        id="Custom_Env/IdentityEnv", # Fill in the name of the custom environment, it can be freely modified
+        entry_point="rmab.simulator:RMABSimulatorOpenRL", # Fill in the filename and class name of the custom environment
+    )
+    simulator_rl = make(id="Custom_Env/IdentityEnv", agent_num=n_arms,
+    all_population=all_population_size, all_features=all_features, all_transitions=all_transitions,
+            cohort_size=n_arms, episode_len=episode_len, n_instances=n_epochs, n_episodes=n_episodes, budget=budget, number_states=n_states, reward_style='combined',lamb=lamb,match_probability=match_prob)
+    simulator_rl.episode_len = episode_len
+    neural_reward, neural_active_rate = optimal_neural_q_iteration(simulator_rl, budget,match_prob, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+
+    neural_match.append(np.mean(neural_reward))
+    neural_active.append(neural_active_rate)
 
 data = {
-    'mean_reward': rewards_by_lamb, 
-    'std_reward': std_by_lamb,
-    'active_rate': active_rates_by_lamb, 
+    'whittle_match': approximate_match, 
+    'whittle_active': approximate_active,
+    'sufficient_match': sufficient_match, 
+    'sufficient_active': sufficient_active,
+    'neural_match': neural_match, 
+    'neural_active': neural_active, 
     'parameters': 
         {'seed'      : seed,
         'n_arms'    : n_arms,
@@ -118,11 +196,47 @@ data = {
         'n_episodes': n_episodes, 
         'episode_len': episode_len, 
         'n_epochs'  : n_epochs, 
-        'match_prob': match_prob} 
+        'match_prob': match_prob, 
+        'lambda_list': lamb_list,} 
 }
 
-save_path = get_save_path('matching',save_name,seed,use_date=save_with_date)
+if n_arms <= 6:
+    np.random.seed(seed)
+    random.seed(seed)
+    _ = optimal_q_iteration(simulator, n_episodes, n_epochs, discount,reward_function='activity')
+    optimal_active_rate = simulator.total_active/(_.size*n_arms)
 
-delete_duplicate_results('matching',save_name,data)
+    np.random.seed(seed)
+    random.seed(seed)
+    optimal_match_reward = optimal_q_iteration(simulator, n_episodes, n_epochs, discount)
+
+    joint_match = []
+    joint_active = []
+
+    for lamb in lamb_list:
+        np.random.seed(seed)
+        random.seed(seed)
+        joint_combined_reward = optimal_q_iteration(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+        joint_combined_active_rate = simulator.total_active/(joint_combined_reward.size*n_arms)
+
+        joint_match.append(np.mean(joint_combined_reward))
+        joint_active.append(joint_combined_active_rate)
+    
+    data['joint_match'] = joint_match 
+    data['joint_active'] = joint_active 
+    data['optimal_match'] = np.mean(optimal_match_reward)
+    data['optimal_active'] = optimal_active_rate
+
+if is_jupyter:
+    plt.plot(joint_match,joint_active,label='Q Iteration')
+    plt.plot(sufficient_match,sufficient_active,label='Sufficient')
+    plt.plot(approximate_match,approximate_active,label='Whittle')
+    # plt.plot(neural_match,neural_active,label='PPO')
+    plt.legend()
+    plt.show()
+
+save_path = get_save_path('combined',save_name,seed,use_date=save_with_date)
+
+delete_duplicate_results('combined',save_name,data)
 
 json.dump(data,open('../results/'+save_path,'w'))

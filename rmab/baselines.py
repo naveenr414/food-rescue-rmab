@@ -4,13 +4,16 @@ import numpy as np
 import heapq
 
 from rmab.uc_whittle import Memoizer
-from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_iteration_approximate, arm_value_iteration_neural, arm_compute_whittle_sufficient
+from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_iteration_neural, arm_compute_whittle_sufficient
 from rmab.utils import get_stationary_distribution, binary_to_decimal, list_to_binary
 from itertools import combinations
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import itertools 
+from openrl.modules.common import PPONet as Net
+from openrl.runners.common import PPOAgent as Agent
 
 
 def optimal_whittle(env, n_episodes, n_epochs, discount,reward_function='activity',lamb=0):
@@ -144,6 +147,7 @@ def optimal_whittle_sufficient(env, n_episodes, n_epochs, discount,reward_functi
     n_actions = env.all_transitions.shape[2]
     budget    = env.budget
     T         = env.episode_len * n_episodes
+    match_prob = env.match_probability
 
     env.reset_all()
 
@@ -154,11 +158,11 @@ def optimal_whittle_sufficient(env, n_episodes, n_epochs, discount,reward_functi
     for epoch in range(n_epochs):
         if epoch != 0: env.reset_instance()
         true_transitions = env.transitions
-
         print('first state', env.observe())
 
         for t in range(0, T):
             state = env.observe()
+            state_str = [str(i) for i in state]
             T_stat = np.sum(state)
 
             # select optimal action based on known transition probabilities
@@ -166,6 +170,7 @@ def optimal_whittle_sufficient(env, n_episodes, n_epochs, discount,reward_functi
             state_WI = np.zeros(N)
             top_WI = []
             min_chosen_subsidy = -1 #0
+
             for i in range(N):
                 arm_transitions = true_transitions[i, :, :, 1]
 
@@ -174,7 +179,7 @@ def optimal_whittle_sufficient(env, n_episodes, n_epochs, discount,reward_functi
                 if check_set_val != -1:
                     state_WI[i] = check_set_val
                 else:
-                    state_WI[i] = arm_compute_whittle_sufficient(arm_transitions, state[i], T_stat,discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb)
+                    state_WI[i] = arm_compute_whittle_sufficient(arm_transitions, state[i], T_stat,discount, min_chosen_subsidy,N,match_prob,budget,reward_function=reward_function,lamb=lamb)
                     memoizer.add_set(arm_transitions, str(state[i])+' '+str(T_stat), state_WI[i])
 
                 if len(top_WI) < budget:
@@ -199,120 +204,50 @@ def optimal_whittle_sufficient(env, n_episodes, n_epochs, discount,reward_functi
     return all_reward
 
 
-def optimal_neural_q_iteration(env, n_episodes, n_epochs, discount,reward_function='matching',lamb=0):
+def optimal_neural_q_iteration(env, budget, match_prob,n_episodes, n_epochs, discount,reward_function='matching',lamb=0):
     """Q-iteration to solve which arms to pull
         Doesn't decompose the arms, but can achieve higher performance
         Is quite slow 
 
     More details in arm_value_iteration_match function
      """
-    N         = env.cohort_size
-    n_states  = env.number_states
-    n_actions = env.all_transitions.shape[2]
-    budget    = env.budget
     T         = env.episode_len * n_episodes
-    match_prob = env.match_probability
 
-    env.reset_all()
+    obs, info = env.reset(options={'reset_type': 'full'})
 
     all_reward = np.zeros((n_epochs, T))
+    total_active = 0 
 
     for epoch in range(n_epochs):
-        if epoch != 0: env.reset_instance()
-        true_transitions = env.transitions
+        if epoch != 0: 
+            env.reset(options={'reset_type': 'instance'})
 
-        print('first state', env.observe())
+        print('first state', obs)
 
-        Q_network = arm_value_iteration_neural(true_transitions,discount,budget,match_prob,reward_function=reward_function,lamb=lamb)
-        if torch.cuda.is_available():
-            device = torch.device("cuda")
-        else:
-            device = torch.device("cpu")
-
-        
-        for t in range(0, T):
-            state = env.observe()
-            state_rep = torch.Tensor(state).to(device)
-
-            max_action = torch.argmax(Q_network(state_rep).cpu()).item()
-            binary_val = bin(max_action)[2:].zfill(N)
-
-            action = np.zeros(N, dtype=np.int8)
-            action = np.array([int(i) for i in binary_val])
-            assert np.sum(action) <= budget 
-
-            next_state, reward, done, _ = env.step(action)
-
-            if done and t+1 < T: env.reset()
-
-            all_reward[epoch, t] = reward
-
-
-    return all_reward
-
-def optimal_sufficient_q(env, n_episodes, n_epochs, discount,reward_function='matching',lamb=0):
-    """Q-iteration to solve which arms to pull
-        Doesn't decompose the arms, but can achieve higher performance
-        Is quite slow 
-
-    More details in arm_value_iteration_match function
-     """
-    N         = env.cohort_size
-    n_states  = env.number_states
-    n_actions = env.all_transitions.shape[2]
-    budget    = env.budget
-    T         = env.episode_len * n_episodes
-    match_prob = env.match_probability
-
-    env.reset_all()
-
-    all_reward = np.zeros((n_epochs, T))
-
-    for epoch in range(n_epochs):
-        if epoch != 0: env.reset_instance()
-        true_transitions = env.transitions
-
-        print('first state', env.observe())
-
-        Q_vals_list = [arm_value_iteration_approximate(true_transitions,discount,budget,match_prob,reward_function=reward_function,lamb=lamb,arm_num=i) for i in range(N)]
-        all_a = list(combinations(range(N), budget))
-        all_a = [np.array(list_to_binary(i,N)) for i in all_a]
+        net = Net(env,device='cuda')
+        agent = Agent(net)
+        agent.train(total_time_steps=1000)
+        obs, info = env.reset(options={'reset_type': 'to_0'})
 
         for t in range(0, T):
-            state = env.observe()
-            state_rep = binary_to_decimal(state)
+            # select optimal action based on known transition probabilities
+            # compute whittle index for each arm
+            action, _ = agent.act(obs)
 
-            rewards = []
-            best_action = -1
+            obs, reward, done, total_active_temp = env.step(action)
+            
+            if np.sum(action)<=budget:
+                reward = 1-np.power(1-match_prob,obs.flatten().dot(action.flatten()))
 
-            for action in all_a:
-                total_reward = 0 
-                for arm_num in range(N):
-                    s_ = state[arm_num] 
-                    a_ = action[arm_num] 
-                    all_actions = binary_to_decimal(action)
-                    S_ = np.dot(state,action) 
-                    T_ = np.sum([true_transitions[i][state[i]][action[i]][1] for i in range(N)])
-                    T_ = int(round(T_))                    
-                    total_reward += Q_vals_list[arm_num][s_,a_,all_actions,S_,T_]
+            else:
+                reward = 0
 
-                if best_action == -1 or rewards[best_action]<total_reward:
-                    best_action = len(rewards)
-                rewards.append(total_reward)
-
-            action = all_a[best_action]
-
-            assert np.sum(action) == budget 
-
-            next_state, reward, done, _ = env.step(action)
-
-            if done and t+1 < T: env.reset()
+            # if done and t+1 < T: env.reset()
 
             all_reward[epoch, t] = reward
+        total_active += total_active_temp[0]['final_info']['total_active']
 
-
-    return all_reward
-
+    return all_reward, total_active/(all_reward.size*action.size)
 
 def random_policy(env, n_episodes, n_epochs):
     """ random action each timestep """
