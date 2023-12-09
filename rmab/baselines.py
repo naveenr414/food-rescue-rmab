@@ -15,6 +15,7 @@ import itertools
 from openrl.modules.common import PPONet as Net
 from openrl.runners.common import PPOAgent as Agent
 from scipy.stats import binom
+from copy import deepcopy
 
 def optimal_whittle(env, n_episodes, n_epochs, discount,reward_function='activity',lamb=0):
     """Whittle index policy based on computing the subsidy for each arm
@@ -358,7 +359,7 @@ def greedy_policy(env, n_episodes, n_epochs,discount,reward_function='matching',
 
     return all_reward
 
-def greedy_iterative_policy(env, n_episodes, n_epochs,discount,reward_function='matching',lamb=0):
+def greedy_iterative_policy(env, n_episodes, n_epochs,discount,reward_function='matching',lamb=0,use_Q=False,use_whittle=False,use_shapley=False):
     """ random action each timestep """
     N         = env.cohort_size
     n_states  = env.number_states
@@ -373,9 +374,33 @@ def greedy_iterative_policy(env, n_episodes, n_epochs,discount,reward_function='
 
     all_reward = np.zeros((n_epochs, T))
 
+    def powerset(iterable):
+        "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+        s = list(iterable)
+        return itertools.chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
+
+
     for epoch in range(n_epochs):
         if epoch != 0: env.reset_instance()
         print('first state', env.observe())
+        match_probabilities = np.array(env.match_probability_list)[env.cohort_idx]
+        true_transitions = env.transitions
+
+        if use_Q:
+            Q_vals = arm_value_iteration_exponential(env.transitions, discount, budget, env.match_probability,reward_function=reward_function,lamb=lamb,match_probability_list=match_probabilities)
+
+        reward_by_group = np.zeros((2**N,2**N))
+        for temp_state in list(itertools.product([0, 1], repeat=N)):
+            for bitstring in list(itertools.product([0, 1], repeat=N)):
+                activity_score = 0
+                non_match_prob = 1
+
+                for i in range(len(bitstring)):
+                    if bitstring[i] == 1:
+                        activity_score += true_transitions[i,temp_state[i],1,1]
+                        activity_score -= true_transitions[i,temp_state[i],0,1]
+                        non_match_prob *= (1-match_probabilities[i]*temp_state[i])
+                reward_by_group[binary_to_decimal(temp_state),binary_to_decimal(bitstring)] = non_match_prob + lamb*activity_score
 
         for t in range(0, T):
             state = env.observe()
@@ -384,19 +409,54 @@ def greedy_iterative_policy(env, n_episodes, n_epochs,discount,reward_function='
             current_non_match_prob = 1
 
             score_by_agent = [0 for i in range(N)]
-            true_transitions = env.transitions
             match_probabilities = np.array(env.match_probability_list)[env.cohort_idx]
 
             for _ in range(budget):
+                current_action = [0 for i in range(N)]
+                for i in selected_idx:
+                    current_action[i] = 1 
+                encoded_state = binary_to_decimal(state)
+
                 scores = []
                 for i in range(N):
                     if i in selected_idx:
                         continue 
-                    activity_score = true_transitions[i,state[i],1,1]
-                    activity_score -= true_transitions[i,state[i],0,1]
                     
-                    matching_score = current_non_match_prob - current_non_match_prob*(1-match_probabilities[i]*state[i])
-                    score = matching_score + activity_score * lamb 
+                    if use_whittle:
+                        arm_transitions = true_transitions[i, :, :, 1]
+                        min_chosen_subsidy = -1
+                        score = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=(1-current_non_match_prob*(1-match_probabilities[i])))
+                    else:
+                        if use_shapley:
+                            score = 0
+                            num = 0
+                            non_selected = [j for j in range(N) if j not in selected_idx and j!=i]
+                            for combo in powerset(non_selected):
+                                indices = [0 for i in range(N)]
+                                for j in combo:
+                                    indices[j] = 1 
+                                for j in selected_idx:
+                                    indices[j] = 1 
+                                initial_score = reward_by_group[binary_to_decimal(state)][binary_to_decimal(indices)]
+                                indices[i] = 1
+                                final_score = reward_by_group[binary_to_decimal(state)][binary_to_decimal(indices)]
+                                num += 1
+                                score += (final_score-initial_score)
+                            score /= num 
+
+                        else:
+                            activity_score = true_transitions[i,state[i],1,1]
+                            activity_score -= true_transitions[i,state[i],0,1]
+                            
+                            matching_score = current_non_match_prob - current_non_match_prob*(1-match_probabilities[i]*state[i])                            
+                            score = matching_score + activity_score * lamb 
+                        if use_Q:
+                            new_action = deepcopy(current_action)
+                            new_action[i] = 1
+
+                            encoded_action = binary_to_decimal(new_action)
+                            future_score = Q_vals[encoded_state,encoded_action]
+                            score += discount*future_score
                     scores.append((score,i))
                 selected_idx.append(max(scores,key=lambda k: k[0])[1])
                 current_non_match_prob *= (1-match_probabilities[selected_idx[-1]])
@@ -414,7 +474,7 @@ def greedy_iterative_policy(env, n_episodes, n_epochs,discount,reward_function='
 
     return all_reward
 
-def mcts_policy(env, n_episodes, n_epochs):
+def mcts_policy(env, n_episodes, n_epochs,discount,reward_function='matching',lamb=0,use_Q=False,use_whittle=False,use_shapley=False):
     """ random action each timestep """
     N         = env.cohort_size
     n_states  = env.number_states
@@ -422,19 +482,102 @@ def mcts_policy(env, n_episodes, n_epochs):
     budget    = env.budget
     T         = env.episode_len * n_episodes
 
+    if reward_function != 'combined':
+        raise Exception("Reward function is not matching; greedy is designed for match + activity")
+
     env.reset_all()
 
     all_reward = np.zeros((n_epochs, T))
 
+    def powerset(iterable):
+        "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+        s = list(iterable)
+        return itertools.chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
+
+
     for epoch in range(n_epochs):
         if epoch != 0: env.reset_instance()
         print('first state', env.observe())
+        match_probabilities = np.array(env.match_probability_list)[env.cohort_idx]
+        true_transitions = env.transitions
+
+        if use_Q:
+            Q_vals = arm_value_iteration_exponential(env.transitions, discount, budget, env.match_probability,reward_function=reward_function,lamb=lamb,match_probability_list=match_probabilities)
+
+        reward_by_group = np.zeros((2**N,2**N))
+        for temp_state in list(itertools.product([0, 1], repeat=N)):
+            for bitstring in list(itertools.product([0, 1], repeat=N)):
+                activity_score = 0
+                non_match_prob = 1
+
+                for i in range(len(bitstring)):
+                    if bitstring[i] == 1:
+                        activity_score += true_transitions[i,temp_state[i],1,1]
+                        activity_score -= true_transitions[i,temp_state[i],0,1]
+                        non_match_prob *= (1-match_probabilities[i]*temp_state[i])
+                reward_by_group[binary_to_decimal(temp_state),binary_to_decimal(bitstring)] = non_match_prob + lamb*activity_score
 
         for t in range(0, T):
             state = env.observe()
 
+            selected_idx = []
+            current_non_match_prob = 1
+
+            score_by_agent = [0 for i in range(N)]
+            match_probabilities = np.array(env.match_probability_list)[env.cohort_idx]
+
+            for _ in range(budget):
+                current_action = [0 for i in range(N)]
+                for i in selected_idx:
+                    current_action[i] = 1 
+                encoded_state = binary_to_decimal(state)
+
+                scores = []
+                for i in range(N):
+                    if i in selected_idx:
+                        continue 
+                    
+                    if use_whittle:
+                        arm_transitions = true_transitions[i, :, :, 1]
+                        min_chosen_subsidy = -1
+                        score = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=(1-current_non_match_prob*(1-match_probabilities[i])))
+                    else:
+                        if use_shapley:
+                            score = 0
+                            num = 0
+                            non_selected = [j for j in range(N) if j not in selected_idx and j!=i]
+                            for combo in powerset(non_selected):
+                                indices = [0 for i in range(N)]
+                                for j in combo:
+                                    indices[j] = 1 
+                                for j in selected_idx:
+                                    indices[j] = 1 
+                                initial_score = reward_by_group[binary_to_decimal(state)][binary_to_decimal(indices)]
+                                indices[i] = 1
+                                final_score = reward_by_group[binary_to_decimal(state)][binary_to_decimal(indices)]
+                                num += 1
+                                score += (final_score-initial_score)
+                            score /= num 
+
+                        else:
+                            activity_score = true_transitions[i,state[i],1,1]
+                            activity_score -= true_transitions[i,state[i],0,1]
+                            
+                            matching_score = current_non_match_prob - current_non_match_prob*(1-match_probabilities[i]*state[i])                            
+                            score = matching_score + activity_score * lamb 
+                        if use_Q:
+                            new_action = deepcopy(current_action)
+                            new_action[i] = 1
+
+                            encoded_action = binary_to_decimal(new_action)
+                            future_score = Q_vals[encoded_state,encoded_action]
+                            score += discount*future_score
+                    scores.append((score,i))
+                selected_idx.append(max(scores,key=lambda k: k[0])[1])
+                current_non_match_prob *= (1-match_probabilities[selected_idx[-1]])
+
             # select arms at random
-            selected_idx = np.random.choice(N, size=budget, replace=False)
+            selected_idx = np.array(selected_idx)
             action = np.zeros(N, dtype=np.int8)
             action[selected_idx] = 1
 
