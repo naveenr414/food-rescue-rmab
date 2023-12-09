@@ -14,7 +14,7 @@ import torch.optim as optim
 import itertools 
 from openrl.modules.common import PPONet as Net
 from openrl.runners.common import PPOAgent as Agent
-
+from scipy.stats import binom
 
 def optimal_whittle(env, n_episodes, n_epochs, discount,reward_function='activity',lamb=0):
     """Whittle index policy based on computing the subsidy for each arm
@@ -42,6 +42,12 @@ def optimal_whittle(env, n_episodes, n_epochs, discount,reward_function='activit
         if epoch != 0: env.reset_instance()
         true_transitions = env.transitions
 
+        match_prob = env.match_probability
+        if env.match_probability_list == []:
+            match_probability_list = np.array([match_prob for i in range(N)])
+        else:
+            match_probability_list = np.array(env.match_probability_list)[env.cohort_idx]
+
         print('first state', env.observe())
 
         for t in range(0, T):
@@ -60,7 +66,7 @@ def optimal_whittle(env, n_episodes, n_epochs, discount,reward_function='activit
                 if check_set_val != -1:
                     state_WI[i] = check_set_val
                 else:
-                    state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb)
+                    state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i])
                     memoizer.add_set(arm_transitions, state[i], state_WI[i])
 
                 if len(top_WI) < budget:
@@ -109,7 +115,10 @@ def optimal_q_iteration(env, n_episodes, n_epochs, discount,reward_function='mat
 
         print('first state', env.observe())
 
-        Q_vals = arm_value_iteration_exponential(true_transitions,discount,budget,match_prob,reward_function=reward_function,lamb=lamb)
+        Q_vals = arm_value_iteration_exponential(true_transitions,discount,budget,match_prob,
+                        reward_function=reward_function,lamb=lamb,
+                        match_probability_list=np.array(
+                            env.match_probability_list)[env.cohort_idx])
 
         for t in range(0, T):
             state = env.observe()
@@ -159,7 +168,30 @@ def optimal_whittle_sufficient(env, n_episodes, n_epochs, discount,reward_functi
         if epoch != 0: env.reset_instance()
         true_transitions = env.transitions
         print('first state', env.observe())
+        
+        p_0_0_1 = 0.3 # np.mean(true_transitions[:,0,0,1])
+        p_1_1_1 = 0.7 # np.mean(true_transitions[:,1,1,1])
+        p_1_0_1 = 0.6 # np.mean(true_transitions[:,1,0,1])
 
+        binom_pmfs = [[0 for i in range(N+1)] for i in range(N+1)]
+
+        for num_1 in range(0,N+1):
+            num_0 = N-num_1 
+
+            for i_0_0_1 in range(num_0+1):
+                for i_1_1_1 in range(0,min(num_1,budget)+1):
+                    for i_1_0_1 in range(0,num_1-i_1_1_1+1):
+                        p_a = binom.pmf(i_0_0_1,num_0,p_0_0_1)
+                        p_b = binom.pmf(i_1_1_1,min(num_1,budget),p_1_1_1)
+                        p_c = binom.pmf(i_1_0_1,num_1-i_1_1_1,p_1_0_1)
+                        binom_pmfs[num_1][i_0_0_1+i_1_1_1+i_1_0_1] += p_a*p_b*p_c 
+        
+        # for i in range(len(a_0)):
+        #     for j in range(len(a_1)):
+        #         for k in range(len(a_2)):
+
+        #         binom_pmfs[i+j] += a_0[i]*a_1[j]
+        
         for t in range(0, T):
             state = env.observe()
             state_str = [str(i) for i in state]
@@ -179,7 +211,7 @@ def optimal_whittle_sufficient(env, n_episodes, n_epochs, discount,reward_functi
                 if check_set_val != -1:
                     state_WI[i] = check_set_val
                 else:
-                    state_WI[i] = arm_compute_whittle_sufficient(arm_transitions, state[i], T_stat,discount, min_chosen_subsidy,N,match_prob,budget,reward_function=reward_function,lamb=lamb)
+                    state_WI[i] = arm_compute_whittle_sufficient(arm_transitions, state[i], T_stat,discount, min_chosen_subsidy,N,match_prob,budget,reward_function=reward_function,lamb=lamb,probs=binom_pmfs)
                     memoizer.add_set(arm_transitions, str(state[i])+' '+str(T_stat), state_WI[i])
 
                 if len(top_WI) < budget:
@@ -202,7 +234,6 @@ def optimal_whittle_sufficient(env, n_episodes, n_epochs, discount,reward_functi
             all_reward[epoch, t] = reward
 
     return all_reward
-
 
 def optimal_neural_q_iteration(env, budget, match_prob,n_episodes, n_epochs, discount,reward_function='matching',lamb=0):
     """Q-iteration to solve which arms to pull
@@ -250,6 +281,140 @@ def optimal_neural_q_iteration(env, budget, match_prob,n_episodes, n_epochs, dis
     return all_reward, total_active/(all_reward.size*action.size)
 
 def random_policy(env, n_episodes, n_epochs):
+    """ random action each timestep """
+    N         = env.cohort_size
+    n_states  = env.number_states
+    n_actions = env.all_transitions.shape[2]
+    budget    = env.budget
+    T         = env.episode_len * n_episodes
+
+    env.reset_all()
+
+    all_reward = np.zeros((n_epochs, T))
+
+    for epoch in range(n_epochs):
+        if epoch != 0: env.reset_instance()
+        print('first state', env.observe())
+
+        for t in range(0, T):
+            state = env.observe()
+
+            # select arms at random
+            selected_idx = np.random.choice(N, size=budget, replace=False)
+            action = np.zeros(N, dtype=np.int8)
+            action[selected_idx] = 1
+
+            next_state, reward, done, _ = env.step(action)
+
+            if done and t+1 < T: env.reset()
+
+            all_reward[epoch, t] = reward
+
+    return all_reward
+
+def greedy_policy(env, n_episodes, n_epochs,discount,reward_function='matching',lamb=0):
+    """ random action each timestep """
+    N         = env.cohort_size
+    n_states  = env.number_states
+    n_actions = env.all_transitions.shape[2]
+    budget    = env.budget
+    T         = env.episode_len * n_episodes
+
+    if reward_function != 'combined':
+        raise Exception("Reward function is not matching; greedy is designed for match + activity")
+
+    env.reset_all()
+
+    all_reward = np.zeros((n_epochs, T))
+
+    for epoch in range(n_epochs):
+        if epoch != 0: env.reset_instance()
+        print('first state', env.observe())
+
+        for t in range(0, T):
+            state = env.observe()
+
+            score_by_agent = [0 for i in range(N)]
+            true_transitions = env.transitions
+            match_probabilities = np.array(env.match_probability_list)[env.cohort_idx]
+
+            for i in range(N):
+                activity_score = true_transitions[i,state[i],1,1]
+                activity_score -= true_transitions[i,state[i],0,1]
+                
+                matching_score = state[i]*match_probabilities[i]
+                score_by_agent[i] = matching_score + activity_score * lamb 
+
+            # select arms at random
+            selected_idx = np.argsort(score_by_agent)[-budget:][::-1]
+            action = np.zeros(N, dtype=np.int8)
+            action[selected_idx] = 1
+
+            next_state, reward, done, _ = env.step(action)
+
+            if done and t+1 < T: env.reset()
+
+            all_reward[epoch, t] = reward
+
+    return all_reward
+
+def greedy_iterative_policy(env, n_episodes, n_epochs,discount,reward_function='matching',lamb=0):
+    """ random action each timestep """
+    N         = env.cohort_size
+    n_states  = env.number_states
+    n_actions = env.all_transitions.shape[2]
+    budget    = env.budget
+    T         = env.episode_len * n_episodes
+
+    if reward_function != 'combined':
+        raise Exception("Reward function is not matching; greedy is designed for match + activity")
+
+    env.reset_all()
+
+    all_reward = np.zeros((n_epochs, T))
+
+    for epoch in range(n_epochs):
+        if epoch != 0: env.reset_instance()
+        print('first state', env.observe())
+
+        for t in range(0, T):
+            state = env.observe()
+
+            selected_idx = []
+            current_non_match_prob = 1
+
+            score_by_agent = [0 for i in range(N)]
+            true_transitions = env.transitions
+            match_probabilities = np.array(env.match_probability_list)[env.cohort_idx]
+
+            for _ in range(budget):
+                scores = []
+                for i in range(N):
+                    if i in selected_idx:
+                        continue 
+                    activity_score = true_transitions[i,state[i],1,1]
+                    activity_score -= true_transitions[i,state[i],0,1]
+                    
+                    matching_score = current_non_match_prob - current_non_match_prob*(1-match_probabilities[i]*state[i])
+                    score = matching_score + activity_score * lamb 
+                    scores.append((score,i))
+                selected_idx.append(max(scores,key=lambda k: k[0])[1])
+                current_non_match_prob *= (1-match_probabilities[selected_idx[-1]])
+
+            # select arms at random
+            selected_idx = np.array(selected_idx)
+            action = np.zeros(N, dtype=np.int8)
+            action[selected_idx] = 1
+
+            next_state, reward, done, _ = env.step(action)
+
+            if done and t+1 < T: env.reset()
+
+            all_reward[epoch, t] = reward
+
+    return all_reward
+
+def mcts_policy(env, n_episodes, n_epochs):
     """ random action each timestep """
     N         = env.cohort_size
     n_states  = env.number_states

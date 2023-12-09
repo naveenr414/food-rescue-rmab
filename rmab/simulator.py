@@ -49,6 +49,7 @@ class RMABSimulator(gym.Env):
         self.n_instances     = n_instances  # n_epochs: number of separate transitions / instances
         self.reward_style = reward_style # Should we get reward style based on states or matches
         self.match_probability = match_probability
+        self.match_probability_list = []
 
         assert_valid_transition(all_transitions)
 
@@ -79,9 +80,9 @@ class RMABSimulator(gym.Env):
         self.instance_count += 1
 
         # get new cohort members
-        cohort_idx       = self.cohort_selection[self.instance_count, :]
-        self.features    = self.all_features[cohort_idx]
-        self.transitions = self.all_transitions[cohort_idx] # shape: cohort_size x n_states x 2 x n_states
+        self.cohort_idx       = self.cohort_selection[self.instance_count, :]
+        self.features    = self.all_features[self.cohort_idx]
+        self.transitions = self.all_transitions[self.cohort_idx] # shape: cohort_size x n_states x 2 x n_states
         self.episode_count = 0
 
         # current state initialization
@@ -170,11 +171,20 @@ class RMABSimulator(gym.Env):
         elif self.reward_style == 'match':
             if action is None:
                 return 0
-            num_active = np.sum(self.states*action)
-            self.total_active += np.sum(self.states)
+            if self.match_probability_list == []:
+                num_active = np.sum(self.states*action)
+                self.total_active += np.sum(self.states)
 
-            prob_all_inactive = (1-self.match_probability)**num_active 
-            return 1-prob_all_inactive
+                prob_all_inactive = (1-self.match_probability)**num_active 
+                return 1-prob_all_inactive
+            else:
+                self.total_active += np.sum(self.states)
+                prob_all_inactive = 1 
+
+                for i in range(len(self.states)):
+                    prob_all_inactive *= (1-self.states[i]*self.match_probability_list[i])
+                
+                return 1-prob_all_inactive 
 
 class RMABSimulatorOpenRL(gym.Env):
     '''
@@ -246,9 +256,9 @@ class RMABSimulatorOpenRL(gym.Env):
             for ep in range(n_episodes):
                 self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size)
 
-        cohort_idx       = self.cohort_selection[0, :]
-        self.transitions = self.all_transitions[cohort_idx] # shape: cohort_size x n_states x 2 x n_states
- 
+        self.cohort_idx       = self.cohort_selection[0, :]
+        self.transitions = self.all_transitions[self.cohort_idx] # shape: cohort_size x n_states x 2 x n_states
+        
 
     def reset_all(self):
         self.instance_count = -1
@@ -262,9 +272,9 @@ class RMABSimulatorOpenRL(gym.Env):
         self.instance_count += 1
 
         # get new cohort members
-        cohort_idx       = self.cohort_selection[self.instance_count, :]
-        self.features    = self.all_features[cohort_idx]
-        self.transitions = self.all_transitions[cohort_idx] # shape: cohort_size x n_states x 2 x n_states
+        self.cohort_idx       = self.cohort_selection[self.instance_count, :]
+        self.features    = self.all_features[self.cohort_idx]
+        self.transitions = self.all_transitions[self.cohort_idx] # shape: cohort_size x n_states x 2 x n_states
         self.episode_count = 0
 
         # current state initialization
