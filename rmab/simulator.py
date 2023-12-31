@@ -32,8 +32,8 @@ class RMABSimulator(gym.Env):
 
     '''
 
-    def __init__(self, all_population, all_features, all_transitions, cohort_size, episode_len, n_instances, n_episodes, budget,
-            number_states=2,reward_style='state',match_probability=0.5):
+    def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
+            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = []):
         '''
         Initialization
         '''
@@ -42,14 +42,18 @@ class RMABSimulator(gym.Env):
         self.all_features    = all_features
         self.all_transitions = all_transitions
         self.cohort_size     = cohort_size
+        self.volunteers_per_arm = volunteers_per_arm
         self.budget          = budget
         self.number_states   = number_states
         self.episode_len     = episode_len
+        self.discount = discount
         self.n_episodes      = n_episodes   # total number of episodes per epoch
         self.n_instances     = n_instances  # n_epochs: number of separate transitions / instances
         self.reward_style = reward_style # Should we get reward style based on states or matches
-        self.match_probability = match_probability
-        self.match_probability_list = []
+        self.match_probability_list = match_probability_list
+
+        if self.match_probability_list == []:
+            self.match_probability_list = [match_probability for i in range(self.cohort_size * self.volunteers_per_arm)]
 
         assert_valid_transition(all_transitions)
 
@@ -62,12 +66,12 @@ class RMABSimulator(gym.Env):
 
         # track indices of cohort members
         self.cohort_selection  = np.zeros((n_instances, cohort_size)).astype(int)
-        self.first_init_states = np.zeros((n_instances, n_episodes, cohort_size)).astype(int)
+        self.first_init_states = np.zeros((n_instances, n_episodes, cohort_size*volunteers_per_arm)).astype(int)
         for i in range(n_instances):
             self.cohort_selection[i, :] = np.random.choice(a=self.all_population, size=self.cohort_size, replace=False)
             print('cohort', self.cohort_selection[i, :])
             for ep in range(n_episodes):
-                self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size)
+                self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size*self.volunteers_per_arm)
 
     def reset_all(self):
         self.instance_count = -1
@@ -81,6 +85,12 @@ class RMABSimulator(gym.Env):
 
         # get new cohort members
         self.cohort_idx       = self.cohort_selection[self.instance_count, :]
+        self.agent_idx = []
+
+        for idx in self.cohort_idx:
+            volunteer_ids = [idx*self.volunteers_per_arm+i for i in range(self.volunteers_per_arm)]
+            self.agent_idx += volunteer_ids
+
         self.features    = self.all_features[self.cohort_idx]
         self.transitions = self.all_transitions[self.cohort_idx] # shape: cohort_size x n_states x 2 x n_states
         self.episode_count = 0
@@ -96,7 +106,7 @@ class RMABSimulator(gym.Env):
         self.timestep      = 0
         self.episode_count += 1
         self.states        = self.first_init_states[self.instance_count, self.episode_count, :]
-        print(f'instance {self.instance_count}, ep {self.episode_count}, state {self.states}')
+        print(f'instance {self.instance_count}, ep {self.episode_count}')
 
         return self.observe()
 
@@ -145,16 +155,18 @@ class RMABSimulator(gym.Env):
         return self.states
 
     def step(self, action):
-        assert len(action) == self.cohort_size
+        assert len(action) == self.cohort_size*self.volunteers_per_arm
         assert np.sum(action) <= self.budget
 
         reward = self.get_reward(action)
 
-        next_states = np.zeros(self.cohort_size)
+        next_states = np.zeros(self.cohort_size*self.volunteers_per_arm)
         for i in range(self.cohort_size):
-            prob = self.transitions[i, self.states[i], action[i], :]
-            next_state = np.random.choice(a=self.number_states, p=prob)
-            next_states[i] = next_state
+            for j in range(self.volunteers_per_arm):
+                idx = i*self.volunteers_per_arm + j
+                prob = self.transitions[i, self.states[idx], action[idx], :]
+                next_state = np.random.choice(a=self.number_states, p=prob)
+                next_states[idx] = next_state
 
         self.states = next_states.astype(int)
         self.timestep += 1
@@ -171,19 +183,12 @@ class RMABSimulator(gym.Env):
         elif self.reward_style == 'match':
             if action is None:
                 return 0
-            if self.match_probability_list == []:
-                num_active = np.sum(self.states*action)
-                self.total_active += np.sum(self.states)
-
-                prob_all_inactive = (1-self.match_probability)**num_active 
-                return 1-prob_all_inactive
             else:
                 self.total_active += np.sum(self.states)
                 prob_all_inactive = 1 
 
                 for i in range(len(self.states)):
-                    prob_all_inactive *= (1-self.states[i]*self.match_probability_list[i])
-                
+                    prob_all_inactive *= (1-self.states[i]*action[i]*np.array(self.match_probability_list)[self.agent_idx][i])                
                 return 1-prob_all_inactive 
 
 class RMABSimulatorOpenRL(gym.Env):

@@ -29,23 +29,25 @@ from openrl.envs.common import make
 from gymnasium.envs.registration import register
 
 from rmab.simulator import RMABSimulator
-from rmab.baselines import optimal_whittle,  optimal_q_iteration, optimal_whittle_sufficient, optimal_neural_q_iteration
+from rmab.baselines import optimal_whittle,  optimal_q_iteration, optimal_whittle_sufficient, greedy_policy, random_policy, greedy_iterative_policy, mcts_policy
 from rmab.fr_dynamics import get_all_transitions
-from rmab.utils import get_save_path, delete_duplicate_results
+from rmab.compute_whittle import arm_value_iteration_exponential
+from rmab.utils import get_save_path, delete_duplicate_results, filter_pareto_optimal, is_pareto_optimal
 
 
 is_jupyter = 'ipykernel' in sys.modules
 
+# +
 if is_jupyter: 
     seed        = 42
-    n_arms      = 5
+    n_arms      = 4
     budget      = 3 
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 30
     episode_len = 20 
     n_epochs    = 10
-    save_name = 'combined_arms_{}'.format(n_arms)
+    save_name = 'heterogenous_arms_{}'.format(n_arms)
     match_prob = 0.5
     save_with_date = False 
 else:
@@ -76,6 +78,9 @@ else:
     save_with_date = args.use_date 
     match_prob = args.match_prob 
 
+
+# -
+
 n_states = 2
 n_actions = 2
 
@@ -91,38 +96,58 @@ random.seed(seed)
 simulator = RMABSimulator(all_population_size, all_features, all_transitions,
             n_arms, episode_len, n_epochs, n_episodes, budget, number_states=n_states, reward_style='match',match_probability=match_prob)
 
-lamb = 1
-
 import logging
 logging.disable(logging.CRITICAL)
 
-if is_jupyter:
-     np.random.seed(seed)
-     random.seed(seed)
-     register(
-          id="Custom_Env/IdentityEnv", # Fill in the name of the custom environment, it can be freely modified
-          entry_point="rmab.simulator:RMABSimulatorOpenRL", # Fill in the filename and class name of the custom environment
-     )
-     simulator_rl = make(id="Custom_Env/IdentityEnv", agent_num=10,
-     all_population=all_population_size, all_features=all_features, all_transitions=all_transitions,
-               cohort_size=n_arms, episode_len=episode_len, n_instances=n_epochs, n_episodes=n_episodes, budget=budget, number_states=n_states, reward_style='combined',lamb=lamb,match_probability=match_prob)
-     simulator_rl.episode_len = episode_len
-     neural_reward, neural_active_rate = optimal_neural_q_iteration(simulator_rl, budget,match_prob, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
-     print(np.mean(neural_reward) + lamb*n_arms*neural_active_rate)
+lamb_list = [0,1,2,4,6,8,12,16,24,32,48,64] 
+lamb_list = [i/n_arms for i in lamb_list]
+
+# ## Heterogenous Match Probability
+
+np.random.seed(seed)
+match_probabilities = [random.random() for i in range(all_population_size)]
+simulator.match_probability = 0.5
+simulator.match_probability_list = match_probabilities
 
 if is_jupyter:
+    lamb = 1
     np.random.seed(seed)
     random.seed(seed)
-    joint_combined_reward = optimal_q_iteration(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
-    joint_combined_active_rate = simulator.total_active/(joint_combined_reward.size*n_arms)
-    print(np.mean(joint_combined_reward) + lamb*n_arms*joint_combined_active_rate)
+    greedy_reward = greedy_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    greedy_active_rate = simulator.total_active/(greedy_reward.size*n_arms)
+    print(np.mean(greedy_reward) + lamb*n_arms*greedy_active_rate)
 
 if is_jupyter:
+    lamb = 1
     np.random.seed(seed)
     random.seed(seed)
-    sufficient_reward = optimal_whittle_sufficient(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
-    sufficient_active_rate = simulator.total_active/(sufficient_reward.size*n_arms)
-    print(np.mean(sufficient_reward)+lamb*n_arms*sufficient_active_rate)
+    greedy_iterative_reward = greedy_iterative_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    greedy_iterative_active_rate = simulator.total_active/(greedy_iterative_reward.size*n_arms)
+    print(np.mean(greedy_iterative_reward) + lamb*n_arms*greedy_active_rate)
+
+if is_jupyter:
+    lamb = 1
+    np.random.seed(seed)
+    random.seed(seed)
+    greedy_iterative_q_reward = greedy_iterative_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb,use_Q=True)
+    greedy_iterative_q_active_rate = simulator.total_active/(greedy_iterative_q_reward.size*n_arms)
+    print(np.mean(greedy_iterative_q_reward) + lamb*n_arms*greedy_iterative_q_active_rate)
+
+if is_jupyter:
+    lamb = 1
+    np.random.seed(seed)
+    random.seed(seed)
+    greedy_iterative_shapley_reward = greedy_iterative_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb,use_shapley=True)
+    greedy_iterative_shapley_active_rate = simulator.total_active/(greedy_iterative_shapley_reward.size*n_arms)
+    print(np.mean(greedy_iterative_shapley_reward) + lamb*n_arms*greedy_iterative_shapley_active_rate)
+
+if is_jupyter:
+    lamb = 1
+    np.random.seed(seed)
+    random.seed(seed)
+    greedy_iterative_shapley_q_reward = greedy_iterative_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb,use_Q=True,use_shapley=True)
+    greedy_iterative_shapley_q_active_rate = simulator.total_active/(greedy_iterative_shapley_q_reward.size*n_arms)
+    print(np.mean(greedy_iterative_shapley_q_reward) + lamb*n_arms*greedy_iterative_shapley_q_active_rate)
 
 if is_jupyter:
     np.random.seed(seed)
@@ -131,62 +156,145 @@ if is_jupyter:
     approximate_combined_active_rate = simulator.total_active/(approximate_combined_reward.size*n_arms)
     print(np.mean(approximate_combined_reward) + lamb*n_arms*approximate_combined_active_rate)
 
-lamb_list = [0,1,2,4,8,16,32,64] 
-lamb_list = [i/n_arms for i in lamb_list]
+if is_jupyter:
+    lamb = 1
+    np.random.seed(seed)
+    random.seed(seed)
+    mcts_reward = mcts_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    mcts_active_rate = simulator.total_active/(mcts_reward.size*n_arms)
+    print(np.mean(mcts_reward) + lamb*n_arms*mcts_active_rate)
 
+if is_jupyter:
+    lamb = 1
+    np.random.seed(seed)
+    random.seed(seed)
+    mcts_q_reward = mcts_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb,use_Q=True)
+    mcts_q_active_rate = simulator.total_active/(mcts_q_reward.size*n_arms)
+    print(np.mean(mcts_q_reward) + lamb*n_arms*mcts_q_active_rate)
+
+if is_jupyter:
+    np.random.seed(seed)
+    random.seed(seed)
+    optimal_reward = optimal_q_iteration(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    optimal_active_rate = simulator.total_active/(optimal_reward.size*n_arms)
+    print(np.mean(optimal_reward) + lamb*n_arms*optimal_active_rate)
 
 # +
-approximate_match = []
-approximate_active = []
+greedy_reward_list = []
+greedy_active_rate_list = []
 
-sufficient_match = []
-sufficient_active = []
+for lamb in lamb_list:
+    np.random.seed(seed)
+    random.seed(seed)
+    greedy_reward = greedy_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    greedy_active_rate = simulator.total_active/(greedy_reward.size*n_arms)
+    greedy_reward_list.append(np.mean(greedy_reward))
+    greedy_active_rate_list.append(greedy_active_rate)
 
-neural_match = []
-neural_active = []
+# +
+greedy_iterative_reward_list = []
+greedy_iterative_active_rate_list = []
+
+for lamb in lamb_list:
+    np.random.seed(seed)
+    random.seed(seed)
+    greedy_iterative_reward = greedy_iterative_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    greedy_iterative_active_rate = simulator.total_active/(greedy_iterative_reward.size*n_arms)
+    greedy_iterative_reward_list.append(np.mean(greedy_iterative_reward))
+    greedy_iterative_active_rate_list.append(greedy_iterative_active_rate)
+
 # -
+
+greedy_iterative_q_reward_list = []
+greedy_iterative_q_active_rate_list = []
+for lamb in lamb_list:
+    np.random.seed(seed)
+    random.seed(seed)
+    greedy_iterative_q_reward = greedy_iterative_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb,use_Q=True)
+    greedy_iterative_q_active_rate = simulator.total_active/(greedy_iterative_q_reward.size*n_arms)
+    greedy_iterative_q_reward_list.append(np.mean(greedy_iterative_q_reward))
+    greedy_iterative_q_active_rate_list.append(greedy_iterative_q_active_rate)
+
+# +
+greedy_iterative_shapley_reward_list = []
+greedy_iterative_shapley_active_rate_list = []
+
+for lamb in lamb_list:
+    np.random.seed(seed)
+    random.seed(seed)
+    greedy_iterative_shapley_reward = greedy_iterative_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb,use_shapley=True)
+    greedy_iterative_shapley_active_rate = simulator.total_active/(greedy_iterative_shapley_reward.size*n_arms)
+    greedy_iterative_shapley_reward_list.append(np.mean(greedy_iterative_shapley_reward))
+    greedy_iterative_shapley_active_rate_list.append(greedy_iterative_shapley_active_rate)
+
+# +
+greedy_iterative_shapley_q_reward_list = []
+greedy_iterative_shapley_q_active_rate_list = []
+
+for lamb in lamb_list:
+    np.random.seed(seed)
+    random.seed(seed)
+    greedy_iterative_shapley_q_reward = greedy_iterative_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb,use_Q=True,use_shapley=True)
+    greedy_iterative_shapley_q_active_rate = simulator.total_active/(greedy_iterative_shapley_q_reward.size*n_arms)
+    greedy_iterative_shapley_q_reward_list.append(np.mean(greedy_iterative_shapley_q_reward))
+    greedy_iterative_shapley_q_active_rate_list.append(greedy_iterative_shapley_q_active_rate)
+
+# +
+approximate_combined_reward_list = []
+approximate_combined_active_rate_list = []
 
 for lamb in lamb_list:
     np.random.seed(seed)
     random.seed(seed)
     approximate_combined_reward = optimal_whittle(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
     approximate_combined_active_rate = simulator.total_active/(approximate_combined_reward.size*n_arms)
+    approximate_combined_reward_list.append(np.mean(approximate_combined_reward))
+    approximate_combined_active_rate_list.append(approximate_combined_active_rate)
 
-    approximate_match.append(np.mean(approximate_combined_reward))
-    approximate_active.append(approximate_combined_active_rate)
-
-for lamb in lamb_list:
-    np.random.seed(seed)
-    random.seed(seed)
-    sufficient_reward = optimal_whittle_sufficient(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
-    sufficient_active_rate = simulator.total_active/(sufficient_reward.size*n_arms)
-
-    sufficient_match.append(np.mean(sufficient_reward))
-    sufficient_active.append(sufficient_active_rate)
+# +
+mcts_reward_list = []
+mcts_active_rate_list = []
 
 for lamb in lamb_list:
     np.random.seed(seed)
     random.seed(seed)
-    register(
-        id="Custom_Env/IdentityEnv", # Fill in the name of the custom environment, it can be freely modified
-        entry_point="rmab.simulator:RMABSimulatorOpenRL", # Fill in the filename and class name of the custom environment
-    )
-    simulator_rl = make(id="Custom_Env/IdentityEnv", agent_num=n_arms,
-    all_population=all_population_size, all_features=all_features, all_transitions=all_transitions,
-            cohort_size=n_arms, episode_len=episode_len, n_instances=n_epochs, n_episodes=n_episodes, budget=budget, number_states=n_states, reward_style='combined',lamb=lamb,match_probability=match_prob)
-    simulator_rl.episode_len = episode_len
-    neural_reward, neural_active_rate = optimal_neural_q_iteration(simulator_rl, budget,match_prob, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    mcts_reward = mcts_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb)
+    mcts_active_rate = simulator.total_active/(mcts_reward.size*n_arms)
+    mcts_reward_list.append(np.mean(mcts_reward))
+    mcts_active_rate_list.append(mcts_active_rate)
 
-    neural_match.append(np.mean(neural_reward))
-    neural_active.append(neural_active_rate)
+# +
+mcts_q_reward_list = []
+mcts_q_active_rate_list = []
+
+for lamb in lamb_list:
+    np.random.seed(seed)
+    random.seed(seed)
+    mcts_q_reward = mcts_policy(simulator, n_episodes, n_epochs, discount,reward_function='combined',lamb=lamb,use_Q=True)
+    mcts_q_active_rate = simulator.total_active/(mcts_q_reward.size*n_arms)
+    mcts_q_reward_list.append(np.mean(mcts_q_reward))
+    mcts_q_active_rate_list.append(mcts_q_active_rate)
+# -
+
+# ## Write Results
 
 data = {
-    'whittle_match': approximate_match, 
-    'whittle_active': approximate_active,
-    'sufficient_match': sufficient_match, 
-    'sufficient_active': sufficient_active,
-    'neural_match': neural_match, 
-    'neural_active': neural_active, 
+    'whittle_match': approximate_combined_reward_list, 
+    'whittle_active': approximate_combined_active_rate_list,
+    'greedy_match': greedy_reward_list, 
+    'greedy_active': greedy_active_rate_list,
+    'iterative_match': greedy_iterative_reward_list,
+    'iterative_active': greedy_iterative_active_rate_list, 
+    'iterative_q_match': greedy_iterative_q_reward_list, 
+    'iterative_q_active': greedy_iterative_q_active_rate_list, 
+    'iterative_shapley_match': greedy_iterative_shapley_reward_list, 
+    'iterative_shapley_active': greedy_iterative_shapley_active_rate_list, 
+    'iterative_q_shapley_match': greedy_iterative_shapley_q_reward_list,
+    'iterative_q_shapley_active': greedy_iterative_shapley_q_active_rate_list,
+    'mcts_match': mcts_reward_list,
+    'mcts_active': mcts_active_rate_list, 
+    'mcts_q_match': mcts_q_reward_list, 
+    'mcts_q_active': mcts_q_active_rate_list,
     'parameters': 
         {'seed'      : seed,
         'n_arms'    : n_arms,
@@ -227,16 +335,10 @@ if n_arms <= 6:
     data['optimal_match'] = np.mean(optimal_match_reward)
     data['optimal_active'] = optimal_active_rate
 
-if is_jupyter:
-    plt.plot(joint_match,joint_active,label='Q Iteration')
-    plt.plot(sufficient_match,sufficient_active,label='Sufficient')
-    plt.plot(approximate_match,approximate_active,label='Whittle')
-    # plt.plot(neural_match,neural_active,label='PPO')
-    plt.legend()
-    plt.show()
-
 save_path = get_save_path('combined',save_name,seed,use_date=save_with_date)
 
 delete_duplicate_results('combined',save_name,data)
 
 json.dump(data,open('../results/'+save_path,'w'))
+
+

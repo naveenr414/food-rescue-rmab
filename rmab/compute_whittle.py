@@ -73,7 +73,7 @@ def arm_value_iteration(transitions, state, predicted_subsidy, discount, thresho
     # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
     return np.argmax(Q_func[state, :])
 
-def arm_value_iteration_exponential(all_transitions, discount, budget, match_prob, threshold=value_iteration_threshold,reward_function='matching',lamb=0,match_probability_list=[]):
+def arm_value_iteration_exponential(all_transitions, discount, budget, volunteers_per_arm, threshold=value_iteration_threshold,reward_function='matching',lamb=0,match_probability_list=[]):
     """ value iteration for a single arm at a time
 
     value iteration for the MDP defined by transitions with lambda-adjusted reward function
@@ -82,7 +82,6 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, match_pro
     Arguments:
         all_transitions: N x num_states x num_actions (presumably 2) x num_states
         discount: Gamma, float
-        match_prob: Float, match probability for each arm
 
     Returns: Q_func, numpy matrix with Q values for each combination of states, 
         and each combination of actions
@@ -91,33 +90,28 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, match_pro
     assert discount < 1
     n_arms, _ = all_transitions.shape[0], all_transitions.shape[2]
     
-    num_real_states = 2**(n_arms)
+    N = len(match_probability_list)
+    num_real_states = 2**(N)
+
     value_func = np.random.rand(num_real_states)
     difference = np.ones((num_real_states))
     iters = 0
-    p = match_prob 
     match_probability_list = np.array(match_probability_list)
     
-    all_s = np.array(list(product([0, 1], repeat=n_arms)))
+    all_s = np.array(list(product([0, 1], repeat=N)))
     all_s = [np.array(i) for i in all_s]
     
-    all_a = list(combinations(range(n_arms), budget))
-    all_a = [np.array(list_to_binary(i,n_arms)) for i in all_a]
+    all_a = list(combinations(range(N), budget))
+    all_a = [np.array(list_to_binary(i,N)) for i in all_a]
 
     def reward_activity(s,a):
         return np.sum(s)
 
     def reward_matching(s,a):
-        if match_probability_list != []:
-            return (1-np.prod(np.power(1-match_probability_list,s*a)))
-        else:
-            return (1-np.power(1-p,s.dot(a)))
+        return (1-np.prod(np.power(1-match_probability_list,s*a)))
         
     def reward_combined(s,a):
-        if match_probability_list != []:
-            return (1-np.prod(np.power(1-match_probability_list,s*a))) + lamb*np.sum(s)
-        else:
-            return (1-np.power(1-p,s.dot(a))) + lamb*np.sum(s)
+        return (1-np.prod(np.power(1-match_probability_list,s*a))) + lamb*np.sum(s)
 
     if reward_function == 'activity':
         r = reward_activity
@@ -130,6 +124,7 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, match_pro
 
     # Precompute transition probabilities for speed 
     precomputed_transition_probabilities = np.zeros((num_real_states,num_real_states,num_real_states))
+    
     for s in all_s:
         s_rep = binary_to_decimal(s) 
 
@@ -138,11 +133,10 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, match_pro
 
             for a in all_a:
                 a_rep = binary_to_decimal(a)
-                transition_probability = np.prod([all_transitions[i][s[i]][a[i]][s_prime[i]]
-                            for i in range(n_arms)])
+                transition_probability = np.prod([all_transitions[i//volunteers_per_arm][s[i]][a[i]][s_prime[i]]
+                            for i in range(N)])
                 precomputed_transition_probabilities[s_rep][a_rep][s_prime_rep] = transition_probability
     
-
     # Perform Q Iteration 
     while np.max(difference) >= threshold:
         iters += 1
@@ -154,7 +148,7 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, match_pro
 
             for a in all_a:
                 a_rep = binary_to_decimal(a)
-                action = np.zeros(n_arms)
+                action = np.zeros(N)
                 for i in a:
                     action[i] = 1 
 
@@ -423,7 +417,7 @@ def arm_compute_whittle_sufficient(transitions, state, T_stat,discount, subsidy_
             # optimal action is active: subsidy is too low
             lb = predicted_subsidy
         else:
-            raise Error(f'action not binary: {action}')
+            raise Exception(f'action not binary: {action}')
     subsidy = (ub + lb) / 2
     return subsidy
 
@@ -439,6 +433,7 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
     """
     lb, ub = get_init_bounds(transitions,lamb) # return lower and upper bounds on WI
     top_WI = []
+
     while abs(ub - lb) > eps:
         predicted_subsidy = (lb + ub) / 2
         # print('lamb', lamb_val, lb, ub)
@@ -457,6 +452,6 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
             # optimal action is active: subsidy is too low
             lb = predicted_subsidy
         else:
-            raise Error(f'action not binary: {action}')
+            raise Exception(f'action not binary: {action}')
     subsidy = (ub + lb) / 2
     return subsidy
