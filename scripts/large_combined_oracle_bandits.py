@@ -85,6 +85,9 @@ n_actions = 2
 all_population_size = 100 # number of random arms to generate
 all_transitions = get_all_transitions(all_population_size)
 
+random.seed(seed)
+np.random.seed(seed)
+
 all_features = np.arange(all_population_size)
 match_probabilities = [random.random() for i in range(all_population_size * volunteers_per_arm)]
 
