@@ -19,7 +19,7 @@ import heapq  # priority queue
 whittle_threshold = 1e-4
 value_iteration_threshold = 1e-2
 
-def arm_value_iteration(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
+def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
                         match_prob=0.5):
     """ value iteration for a single arm at a time
 
@@ -71,7 +71,17 @@ def arm_value_iteration(transitions, state, predicted_subsidy, discount, thresho
         difference = np.abs(orig_value_func - value_func)
 
     # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
-    return np.argmax(Q_func[state, :])
+    return Q_func[state,:]
+
+def arm_value_iteration(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
+                        match_prob=0.5):
+    """ value iteration for a single arm at a time
+
+    value iteration for the MDP defined by transitions with lambda-adjusted reward function
+    return action corresponding to pi^*(s_I)
+    """
+    return np.argmax(get_q_vals(transitions,state,predicted_subsidy,discount,threshold,reward_function=reward_function,lamb=lamb,match_prob=match_prob))
+
 
 def arm_value_iteration_exponential(all_transitions, discount, budget, volunteers_per_arm, threshold=value_iteration_threshold,reward_function='matching',lamb=0,match_probability_list=[]):
     """ value iteration for a single arm at a time

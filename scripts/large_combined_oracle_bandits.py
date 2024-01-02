@@ -29,6 +29,7 @@ import time
 
 from rmab.simulator import RMABSimulator
 from rmab.omniscient_policies import *
+from rmab.mcts_policies import mcts_policy, mcts_max_policy, mcts_greedy_policy, mcts_mcts_policy
 from rmab.fr_dynamics import get_all_transitions
 from rmab.utils import get_save_path, delete_duplicate_results
 
@@ -39,13 +40,13 @@ if is_jupyter:
     seed        = 42
     n_arms      = 2
     volunteers_per_arm = 2
-    budget      = 2 
+    budget      = 3
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 30
     episode_len = 20 
     n_epochs    = 10
-    save_name = 'combined_{}_{}_{}'.format(n_arms,volunteers_per_arm,seed)
+    save_name = 'mcts_{}_{}_{}'.format(n_arms,volunteers_per_arm,seed)
     save_with_date = False 
 else:
     parser = argparse.ArgumentParser()
@@ -92,9 +93,9 @@ random.seed(seed)
 simulator = RMABSimulator(all_population_size, all_features, all_transitions,
             n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='match',match_probability_list=match_probabilities)
 
-# ## Index Policies
+lamb = 0 # 1/(n_arms*volunteers_per_arm)
 
-lamb = 1/(n_arms*volunteers_per_arm)
+# ## Index Policies
 
 if is_jupyter:
     policy = greedy_policy
@@ -125,6 +126,32 @@ if is_jupyter:
     policy = whittle_greedy_policy 
     whittle_greedy_reward, whittle_greedy_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
     print(np.mean(whittle_greedy_reward) + whittle_greedy_active_rate*lamb*n_arms*volunteers_per_arm)
+
+# ## MCTS Policies
+
+if is_jupyter:
+    policy = mcts_policy 
+    mcts_reward, mcts_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+    print(np.mean(mcts_reward) + mcts_active_rate*lamb*n_arms*volunteers_per_arm)
+
+
+if is_jupyter:
+    policy = mcts_max_policy
+    mcts_max_reward, mcts_max_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+    print(np.mean(mcts_max_reward) + mcts_max_active_rate*lamb*n_arms*volunteers_per_arm)
+
+
+if is_jupyter:
+    policy = mcts_greedy_policy
+    mcts_greedy_reward, mcts_greedy_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+    print(np.mean(mcts_greedy_reward) + mcts_greedy_active_rate*lamb*n_arms*volunteers_per_arm)
+
+
+if is_jupyter:
+    policy = mcts_mcts_policy
+    mcts_mcts_reward, mcts_mcts_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+    print(np.mean(mcts_mcts_reward) + mcts_mcts_active_rate*lamb*n_arms*volunteers_per_arm)
+
 
 # ## Optimal Policy
 
@@ -242,8 +269,12 @@ if is_jupyter:
 lamb_list = [0,0.25,0.5,1,2,4,8,16,32,64] 
 lamb_list = [i/(n_arms*volunteers_per_arm) for i in lamb_list]
 
-policies = [random_policy,greedy_policy,greedy_one_step_policy,whittle_policy,whittle_activity_policy,shapley_whittle_policy,whittle_greedy_policy]
-policy_names = ["random","greedy","greedy_one_step","whittle","whittle_activity","shapley_whittle","whittle_greedy"]
+if "combined" in save_name:
+    policies = [random_policy,greedy_policy,greedy_one_step_policy,whittle_policy,whittle_activity_policy,shapley_whittle_policy,whittle_greedy_policy]
+    policy_names = ["random","greedy","greedy_one_step","whittle","whittle_activity","shapley_whittle","whittle_greedy"]
+elif "mcts" in save_name:
+    policies = [mcts_policy,mcts_mcts_policy]
+    policy_names = ["mcts","mcts_mcts"]
 
 results = {}
 results['parameters'] = {'seed'      : seed,
