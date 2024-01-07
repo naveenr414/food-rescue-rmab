@@ -29,7 +29,7 @@ import time
 
 from rmab.simulator import RMABSimulator
 from rmab.omniscient_policies import *
-from rmab.mcts_policies import mcts_policy, mcts_max_policy, mcts_greedy_policy, mcts_mcts_policy
+from rmab.mcts_policies import mcts_policy, mcts_max_policy, mcts_greedy_policy, mcts_mcts_policy, mcts_whittle_policy
 from rmab.fr_dynamics import get_all_transitions
 from rmab.utils import get_save_path, delete_duplicate_results
 
@@ -39,15 +39,16 @@ is_jupyter = 'ipykernel' in sys.modules
 if is_jupyter: 
     seed        = 42
     n_arms      = 2
-    volunteers_per_arm = 2
+    volunteers_per_arm = 4
     budget      = 3
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 30
     episode_len = 20 
     n_epochs    = 10
-    save_name = 'mcts_{}_{}_{}'.format(n_arms,volunteers_per_arm,seed)
     save_with_date = False 
+    TIME_PER_RUN = 0.01 * 1000
+    save_name = 'two_step_{}_{}'.format(int(TIME_PER_RUN),seed)
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=3)
@@ -60,6 +61,7 @@ else:
     parser.add_argument('--alpha',          '-a', help='alpha: for conf radius', type=float, default=3)
     parser.add_argument('--seed',           '-s', help='random seed', type=int, default=42)
     parser.add_argument('--save_name',      '-n', help='save name', type=str, default='combined_lamb')
+    parser.add_argument('--time_per_run',      '-t', help='time per MCTS run', type=float, default=.01*1000)
     parser.add_argument('--use_date', action='store_true')
 
     args = parser.parse_args()
@@ -75,6 +77,7 @@ else:
     n_epochs    = args.n_epochs
     save_name   = args.save_name 
     save_with_date = args.use_date 
+    TIME_PER_RUN = args.time_per_run
 
 
 # -
@@ -96,7 +99,9 @@ random.seed(seed)
 simulator = RMABSimulator(all_population_size, all_features, all_transitions,
             n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='match',match_probability_list=match_probabilities)
 
-lamb = 0 # 1/(n_arms*volunteers_per_arm)
+simulator.TIME_PER_RUN = TIME_PER_RUN
+
+lamb = 64/(n_arms*volunteers_per_arm)
 
 # ## Index Policies
 
@@ -137,147 +142,43 @@ if is_jupyter:
     mcts_reward, mcts_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
     print(np.mean(mcts_reward) + mcts_active_rate*lamb*n_arms*volunteers_per_arm)
 
-
-if is_jupyter:
-    policy = mcts_max_policy
-    mcts_max_reward, mcts_max_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(mcts_max_reward) + mcts_max_active_rate*lamb*n_arms*volunteers_per_arm)
-
-
-if is_jupyter:
-    policy = mcts_greedy_policy
-    mcts_greedy_reward, mcts_greedy_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(mcts_greedy_reward) + mcts_greedy_active_rate*lamb*n_arms*volunteers_per_arm)
-
-
 if is_jupyter:
     policy = mcts_mcts_policy
     mcts_mcts_reward, mcts_mcts_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
     print(np.mean(mcts_mcts_reward) + mcts_mcts_active_rate*lamb*n_arms*volunteers_per_arm)
 
+if is_jupyter:
+    policy = mcts_whittle_policy
+    mcts_mcts_reward, mcts_mcts_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+    print(np.mean(mcts_mcts_reward) + mcts_mcts_active_rate*lamb*n_arms*volunteers_per_arm)
 
 # ## Optimal Policy
 
-if is_jupyter:
+if is_jupyter and n_arms*volunteers_per_arm <= 6:
     policy = q_iteration_policy
     per_epoch_function = q_iteration_epoch
     q_reward, q_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,per_epoch_function=per_epoch_function)
     print(np.mean(q_reward) + q_active_rate*lamb*n_arms*volunteers_per_arm)
 
-# ## Index Policies, Large N
-
-if is_jupyter:
-    n_arms = 3 
-    volunteers_per_arm = 10
-    match_probabilities = [random.random() for i in range(all_population_size * volunteers_per_arm)]
-
-    np.random.seed(seed)
-    random.seed(seed)
-    simulator = RMABSimulator(all_population_size, all_features, all_transitions,
-                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='match',match_probability_list=match_probabilities)
-
-lamb = 1/(n_arms*volunteers_per_arm)
-
-if is_jupyter:
-    start = time.time()
-    policy = random_policy
-    random_reward, random_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(random_reward) + random_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
-if is_jupyter:
-    start = time.time()
-    policy = whittle_policy
-    whittle_reward, whittle_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(whittle_reward) + whittle_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
-if is_jupyter:
-    start = time.time()
-    policy = greedy_one_step_policy
-    greedy_one_step_reward, greedy_one_step_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(greedy_one_step_reward) + greedy_one_step_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
-if is_jupyter:
-    start = time.time()
-    policy = shapley_whittle_policy 
-    whittle_shapley_reward, whittle_shapley_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(whittle_shapley_reward) + whittle_shapley_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
-if is_jupyter:
-    start = time.time()
-    policy = whittle_greedy_policy 
-    whittle_greedy_reward, whittle_greedy_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(whittle_greedy_reward) + whittle_greedy_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
-if is_jupyter:
-    n_arms = 10
-    volunteers_per_arm = 3
-    match_probabilities = [random.random() for i in range(all_population_size * volunteers_per_arm)]
-
-    np.random.seed(seed)
-    random.seed(seed)
-    simulator = RMABSimulator(all_population_size, all_features, all_transitions,
-                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='match',match_probability_list=match_probabilities)
-
-lamb = 1/(n_arms*volunteers_per_arm)
-
-if is_jupyter:
-    start = time.time()
-    policy = greedy_policy
-    greedy_reward, greedy_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(greedy_reward) + greedy_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
-if is_jupyter:
-    start = time.time()
-    policy = whittle_policy
-    whittle_reward, whittle_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(whittle_reward) + whittle_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
-if is_jupyter:
-    start = time.time()
-    policy = greedy_one_step_policy
-    greedy_one_step_reward, greedy_one_step_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(greedy_one_step_reward) + greedy_one_step_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
-if is_jupyter:
-    start = time.time()
-    policy = whittle_activity_policy   
-    whittle_activity_reward, whittle_activity_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(whittle_activity_reward) + whittle_activity_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
-if is_jupyter:
-    start = time.time()
-    policy = shapley_whittle_policy 
-    whittle_shapley_reward, whittle_shapley_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(whittle_shapley_reward) + whittle_shapley_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
-if is_jupyter:
-    start = time.time()
-    policy = whittle_greedy_policy 
-    whittle_greedy_reward, whittle_greedy_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-    print(np.mean(whittle_greedy_reward) + whittle_greedy_active_rate*lamb*n_arms*volunteers_per_arm)
-    print("Took {} time".format(time.time()-start))
-
 # ## Actual Experiments
 
-lamb_list = [0,0.25,0.5,1,2,4,8,16,32,64] 
+# TODO: Change this back
+if "two_step" in save_name:
+    lamb_list = [1,16,64]
+else:
+    lamb_list = [0,0.25,0.5,1,2,4,8,16,32,64] 
 lamb_list = [i/(n_arms*volunteers_per_arm) for i in lamb_list]
 
+# TODO: Change this back
 if "combined" in save_name:
     policies = [random_policy,greedy_policy,greedy_one_step_policy,whittle_policy,whittle_activity_policy,shapley_whittle_policy,whittle_greedy_policy]
     policy_names = ["random","greedy","greedy_one_step","whittle","whittle_activity","shapley_whittle","whittle_greedy"]
 elif "mcts" in save_name:
     policies = [mcts_policy,mcts_mcts_policy]
     policy_names = ["mcts","mcts_mcts"]
+elif "two_step" in save_name:
+    policies = [whittle_greedy_policy,mcts_policy,mcts_mcts_policy,mcts_whittle_policy]
+    policy_names = ["whittle_greedy","mcts","mcts_mcts","mcts_whittle"]
 
 results = {}
 results['parameters'] = {'seed'      : seed,
@@ -289,7 +190,8 @@ results['parameters'] = {'seed'      : seed,
         'n_episodes': n_episodes, 
         'episode_len': episode_len, 
         'n_epochs'  : n_epochs, 
-        'lambda_list': lamb_list,} 
+        'lambda_list': lamb_list,
+        'time_per_run': TIME_PER_RUN} 
 
 if (n_arms * volunteers_per_arm) <= 6:
     print("Running optimal")

@@ -33,7 +33,7 @@ class RMABSimulator(gym.Env):
     '''
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
-            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = []):
+            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],TIME_PER_RUN=10.0):
         '''
         Initialization
         '''
@@ -51,6 +51,7 @@ class RMABSimulator(gym.Env):
         self.n_instances     = n_instances  # n_epochs: number of separate transitions / instances
         self.reward_style = reward_style # Should we get reward style based on states or matches
         self.match_probability_list = match_probability_list
+        self.TIME_PER_RUN = TIME_PER_RUN
 
         if self.match_probability_list == []:
             self.match_probability_list = [match_probability for i in range(self.cohort_size * self.volunteers_per_arm)]
@@ -185,10 +186,14 @@ class RMABSimulator(gym.Env):
                 return 0
             else:
                 self.total_active += np.sum(self.states)
-                prob_all_inactive = 1 
+                # TODO: Make sure this is correct
+                prod_state = 1-self.states*action*np.array(self.match_probability_list)[self.agent_idx]
 
-                for i in range(len(self.states)):
-                    prob_all_inactive *= (1-self.states[i]*action[i]*np.array(self.match_probability_list)[self.agent_idx][i])                
+                prob_all_inactive = np.prod(prod_state)
+
+
+                # for i in range(len(self.states)):
+                #     prob_all_inactive *= (1-self.states[i]*action[i]*np.array(self.match_probability_list)[self.agent_idx][i])                
                 return 1-prob_all_inactive 
 
 class RMABSimulatorOpenRL(gym.Env):

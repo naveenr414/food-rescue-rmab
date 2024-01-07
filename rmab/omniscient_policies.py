@@ -18,6 +18,7 @@ from scipy.stats import binom
 from copy import deepcopy
 from mcts import mcts
 import random 
+import time
 
 
 def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined"):
@@ -31,14 +32,12 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined"):
         memoizer: Object that stores previous Whittle index computations
     
     Returns: List of Whittle indices for each arm"""
-    
     N = len(state) 
     match_probability_list = np.array(env.match_probability_list)[env.agent_idx]
     true_transitions = env.transitions 
     discount = env.discount 
 
     state_WI = np.zeros(N)
-    top_WI = []
     min_chosen_subsidy = -1 
     for i in range(N):
         arm_transitions = true_transitions[i//env.volunteers_per_arm, :, :, 1]
@@ -49,13 +48,7 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined"):
             state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i])
             memoizer.add_set(arm_transitions, state[i], state_WI[i])
 
-        if len(top_WI) < budget:
-            heapq.heappush(top_WI, (state_WI[i], i))
-        else:
-            heapq.heappushpop(top_WI, (state_WI[i], i))
-            min_chosen_subsidy = top_WI[0][0]  # smallest-valued item
-
-    return state_WI 
+    return state_WI
 
 def shapley_index(env,state,memoizer_shapley = {}):
     """Compute the Shapley index for matching; how much
@@ -286,7 +279,8 @@ def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
     state_WI = whittle_index(env,state,budget,lamb,memoizer)
     state_WI*=lamb 
 
-    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]*state
+    match_probabilities /= (1-env.discount)
 
     state_WI += match_probabilities
 
@@ -389,9 +383,12 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
     all_reward = np.zeros((n_epochs, T))
 
+    start = time.time()
     for epoch in range(n_epochs):
         if epoch != 0: env.reset_instance()
-        print('first state', env.observe())
+        first_state = env.observe()
+        if len(first_state)>20:
+            first_state = first_state[:20]
 
         if per_epoch_function:
             per_epoch_results = per_epoch_function(env,lamb)
@@ -409,7 +406,9 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
             if done and t+1 < T: env.reset()
 
             all_reward[epoch, t] = reward
-    
+    print("Took {} time".format(time.time()-start))
+    env.time_taken = time.time()-start
+
     activity_rate = env.total_active/(all_reward.size*env.cohort_size*env.volunteers_per_arm)
 
     return all_reward, activity_rate 
