@@ -4,6 +4,7 @@ import heapq
 from rmab.uc_whittle import Memoizer
 from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_iteration_neural, arm_compute_whittle_sufficient
 from rmab.utils import get_stationary_distribution, binary_to_decimal, list_to_binary
+from rmab.mcts_policies import run_mcts, two_step_idx_to_action
 from itertools import combinations
 
 import torch
@@ -16,6 +17,259 @@ from scipy.stats import binom
 from copy import deepcopy
 from mcts import mcts
 import random 
+
+
+class VolunteerStateTwoStep():
+    def __init__(self):
+        self.non_match_prob = 1
+        self.previous_pulls = []
+        self.N = 0
+        self.arm_values = []
+        self.budget = 0
+        self.states = []
+        self.discount = 0.9
+        self.lamb = 0
+        self.max_depth = 1
+        self.rollout_number = 1
+        self.previous_rewards = []
+        self.transitions = []
+        self.cohort_size = 0
+        self.volunteers_per_arm = 0
+        self.memory = {}
+        self.memoizer = Memoizer('optimal')
+
+    def getPossibleActions(self):
+        possibleActions = []
+        for i in range(len(self.states)):
+            if possibleActions.count(i) < self.volunteers_per_arm:
+                possibleActions.append(Action(arm=i))
+        return possibleActions
+
+    def takeAction(self, action):
+        newState = deepcopy(self)
+        newState.previous_pulls.append(action.arm)
+        newState.memoizer = self.memoizer
+        
+        return newState
+
+    def isTerminal(self):
+        if len(self.previous_pulls) == self.budget:
+            return True 
+        return False 
+
+    def get_current_reward(self,state,previous_pulls):
+        policy = 'index'
+
+        expected_active_rate = 0
+        non_match_prob = 1 
+        for i in range(len(state)):
+            action_count = previous_pulls.count(i)
+            num_one = action_count 
+            num_zero = self.volunteers_per_arm - num_one 
+            expected_active_rate += self.transitions[i,state[i],1,1]*num_one
+            expected_active_rate += self.transitions[i,state[i],0,1]*num_zero 
+
+            non_match_prob *= (1-state[i]*self.arm_values[i])**(num_one)
+
+        if policy == 'reward':
+            value = 1-non_match_prob  + self.lamb*expected_active_rate
+        elif policy == 'index':
+            state_WI = np.zeros(len(state))
+
+            for i in range(len(state_WI)):
+                arm_transitions = self.env.transitions[i//self.volunteers_per_arm, :, :, 1]
+                check_set_val = self.memoizer.check_set(arm_transitions, state[i])
+
+                if check_set_val != -1:
+                    state_WI[i] = check_set_val
+                    
+                else:
+                    state_WI[i] = get_q_vals(arm_transitions, state[i], 0, self.discount,reward_function="activity",lamb=self.lamb)[1]
+                    self.memoizer.add_set(arm_transitions, state[i], state_WI[i])
+
+            # state_WI = whittle_index(env,state,budget,lamb,memoizer,reward_function="combined")
+            non_match_prob = 1 
+            for i in previous_pulls:
+                non_match_prob *= (1-self.env.transitions[i//self.volunteers_per_arm,state[i],1,1]*self.arm_values[i])
+
+            value = (1-non_match_prob)/(1-self.discount) + self.lamb*np.sum(state_WI[list(previous_pulls)]) 
+                
+        return value 
+    
+    def getReward(self):
+        total_value = 0
+        disc = 1 
+
+        previous_rewards = []
+        previous_rewards.append(self.get_current_reward(self.states,self.previous_pulls))
+
+        action = [self.previous_pulls.count(i) for i in range(len(self.states))]
+
+        for _ in range(self.max_depth-1):
+            next_states = np.zeros(self.cohort_size,dtype=int)
+            for i in range(self.cohort_size):
+                num_one = action[i] 
+                num_zero = self.volunteers_per_arm - num_one 
+                prob = self.transitions[i, self.states[i], 0, :] * num_zero 
+                prob += self.transitions[i, self.states[i], 1, :] * num_one 
+                prob /= self.volunteers_per_arm
+
+                prob = np.clip(prob,0,1)
+                prob /= np.sum(prob)
+
+                next_state = np.random.choice(a=2, p=prob)
+                next_states[i] = next_state
+            
+            original_list = [i for i in range(self.cohort_size) for _ in range(self.volunteers_per_arm)]
+            random.shuffle(original_list)
+
+            reward = self.get_current_reward(next_states, original_list[:self.budget])
+            previous_rewards.append(reward)
+
+        for i in previous_rewards:
+            total_value += disc*i 
+            disc *= self.discount 
+
+        return total_value 
+
+    def set_state(self,states):
+        self.states = np.array([int(np.round(np.mean(states[i*self.volunteers_per_arm:(i+1)*self.volunteers_per_arm]))) for i in range(self.cohort_size)])
+
+def findMaxChild(root,explorationValue):
+    bestVal = 0
+
+    if root.state.isTerminal():
+        return root.totalReward / root.numVisits + explorationValue * math.sqrt(
+        2 * math.log(root.parent.numVisits) / root.numVisits)
+
+    for child in root.children.values():
+        bestVal = max(bestVal,findMaxChild(child,explorationValue))
+
+    return bestVal 
+
+def two_step_idx_to_action(selected_idx,env,state,lamb,memory):
+    """Run MCTS to find the groups, then run MCTS again to find
+        which volunteers in each group to notify
+        
+    Arguments:
+        env: RMAB Simulator Environment
+        state: 0-1 numpy array for the state
+        lamb: Float, what \lambda value
+        memory: List with the first element as a dictionary
+            second element as a memoizer
+            
+    Returns: 0-1 numpy array with the actions to take"""
+
+
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    match_probabilities *= (np.array(state)+.01*(1-np.array(state)))
+    num_by_cohort = [0 for i in range(env.cohort_size)]
+
+    for i in selected_idx:
+        num_by_cohort[i] += 1
+        
+    selected_agents = []
+
+    for i in range(len(num_by_cohort)):
+        if num_by_cohort[i] > 0:
+            k_largest = np.argsort(match_probabilities[i*env.volunteers_per_arm:(i+1)*env.volunteers_per_arm])[-num_by_cohort[i]:]
+            k_largest = [i*env.volunteers_per_arm + j for j in k_largest]
+            selected_agents += k_largest 
+    
+    action = np.zeros(len(state), dtype=np.int8)
+    action[selected_agents] = 1
+
+    return action, memory
+
+
+class mcts_max():
+    def __init__(self, timeLimit=None, iterationLimit=None, explorationConstant=1 / math.sqrt(2),
+                 rolloutPolicy=randomPolicy):
+        if timeLimit != None:
+            if iterationLimit != None:
+                raise ValueError("Cannot have both a time limit and an iteration limit")
+            # time taken for each MCTS search in milliseconds
+            self.timeLimit = timeLimit
+            self.limitType = 'time'
+        else:
+            if iterationLimit == None:
+                raise ValueError("Must have either a time limit or an iteration limit")
+            # number of iterations of the search
+            if iterationLimit < 1:
+                raise ValueError("Iteration limit must be greater than one")
+            self.searchLimit = iterationLimit
+            self.limitType = 'iterations'
+        self.explorationConstant = explorationConstant
+        self.rollout = rolloutPolicy
+
+    def search(self, initialState):
+        self.root = treeNode(initialState, None)
+
+        if self.limitType == 'time':
+            timeLimit = time.time() + self.timeLimit / 1000
+            while time.time() < timeLimit:
+                self.executeRound()
+        else:
+            for i in range(self.searchLimit):
+                self.executeRound()
+
+        bestChild = self.getBestChild(self.root, 0)
+        return self.getAction(self.root, bestChild)
+
+    def executeRound(self):
+        node = self.selectNode(self.root)
+        reward = self.rollout(node.state)
+        self.backpropogate(node, reward)
+
+    def selectNode(self, node):
+        while not node.isTerminal:
+            if node.isFullyExpanded:
+                node = self.getBestChild(node, self.explorationConstant)
+            else:
+                return self.expand(node)
+        return node
+
+    def expand(self, node):
+        actions = node.state.getPossibleActions()
+        for action in actions:
+            if action not in node.children.keys():
+                newNode = treeNode(node.state.takeAction(action), node)
+                node.children[action] = newNode
+                if len(actions) == len(node.children):
+                    node.isFullyExpanded = True
+                return newNode
+
+        raise Exception("Should never reach here")
+
+    def backpropogate(self, node, reward):
+        while node is not None:
+            node.numVisits += 1
+            node.totalReward += reward
+            node = node.parent
+
+    def getBestChild(self, node, explorationValue):
+        bestValue = float("-inf")
+        bestNodes = []
+
+        for child in node.children.values():
+            # TODO: Incorporate this back in 
+            nodeValue = findMaxChild(child,explorationValue)
+
+            if nodeValue > bestValue:
+                bestValue = nodeValue
+                bestNodes = [child]
+            elif nodeValue == bestValue:
+                bestNodes.append(child)
+        return random.choice(bestNodes)
+
+    def getAction(self, root, bestChild):
+        for action, node in root.children.items():
+            if node is bestChild:
+                return action
+
+def mcts_max_policy(env,state,budget,lamb,memory,per_epoch_results):
+    return run_mcts(env,state,budget,lamb,memory,per_epoch_results,mcts_max,VolunteerState,one_step_idx_to_action)
+
 
 def optimal_neural_q_iteration(env, budget, match_prob,n_episodes, n_epochs, discount,reward_function='matching',lamb=0):
     """Q-iteration to solve which arms to pull
@@ -414,3 +668,5 @@ def WIQL(env, n_episodes, n_epochs):
 
     return all_reward
 
+def mcts_greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
+    return run_mcts(env,state,budget,lamb,memory,per_epoch_results,mcts,VolunteerStateTwoStep,two_step_idx_to_action)
