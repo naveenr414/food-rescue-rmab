@@ -17,7 +17,7 @@ from scipy.stats import binom
 import heapq  # priority queue
 
 whittle_threshold = 1e-4
-value_iteration_threshold = 1e-2
+value_iteration_threshold = 1e-4
 
 def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
                         match_prob=0.5):
@@ -81,6 +81,18 @@ def arm_value_iteration(transitions, state, predicted_subsidy, discount, thresho
     return action corresponding to pi^*(s_I)
     """
     return np.argmax(get_q_vals(transitions,state,predicted_subsidy,discount,threshold,reward_function=reward_function,lamb=lamb,match_prob=match_prob))
+
+def arm_value_v_iteration(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
+                        match_prob=0.5):
+    """ value iteration for a single arm at a time
+
+    value iteration for the MDP defined by transitions with lambda-adjusted reward function
+    return action corresponding to pi^*(s_I)
+    """
+
+    Q_vals = get_q_vals(transitions,state,predicted_subsidy,discount,threshold,reward_function=reward_function,lamb=lamb,match_prob=match_prob)
+    return np.argmax(Q_vals), np.max(Q_vals)
+
 
 
 def arm_value_iteration_exponential(all_transitions, discount, budget, volunteers_per_arm, threshold=value_iteration_threshold,reward_function='matching',lamb=0,match_probability_list=[]):
@@ -431,7 +443,7 @@ def arm_compute_whittle_sufficient(transitions, state, T_stat,discount, subsidy_
     subsidy = (ub + lb) / 2
     return subsidy
 
-def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0,match_prob=0.5,match_probability_list=[]):
+def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0,match_prob=0.5,match_probability_list=[],get_v=False):
     """
     compute whittle index for a single arm using binary search
 
@@ -453,8 +465,13 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
             # print('breaking early!', subsidy_break, lb, ub)
             return -10
 
-        action = arm_value_iteration(transitions, state, predicted_subsidy, discount,reward_function=reward_function,lamb=lamb,
-                    match_prob=match_prob)
+        if get_v:
+            action, v_val = arm_value_v_iteration(transitions, state, predicted_subsidy, discount,reward_function=reward_function,lamb=lamb,
+                        match_prob=match_prob)
+        else:
+            action = arm_value_iteration(transitions, state, predicted_subsidy, discount,reward_function=reward_function,lamb=lamb,
+                        match_prob=match_prob)
+
         if action == 0:
             # optimal action is passive: subsidy is too high
             ub = predicted_subsidy
@@ -463,5 +480,13 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
             lb = predicted_subsidy
         else:
             raise Exception(f'action not binary: {action}')
+    
+    threshold = value_iteration_threshold
+    # print(predicted_subsidy,np.mean(transitions),state,match_prob,get_q_vals(transitions,state,0,discount,threshold,reward_function=reward_function,lamb=lamb,match_prob=match_prob))
+
     subsidy = (ub + lb) / 2
+
+    if get_v:
+        return subsidy, v_val
+
     return subsidy

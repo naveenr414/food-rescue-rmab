@@ -303,6 +303,9 @@ def run_two_step(env,state,budget,lamb,memory,per_epoch_results,idx_to_action,ti
     if timeLimit == -1:
         timeLimit = env.TIME_PER_RUN 
 
+    if ''.join([str(i) for i in state]) in memory[0]:
+        return memory[0][''.join([str(i) for i in state])], memory
+
     action, memory = idx_to_action(env,state,lamb,memory)
     memory[0][''.join([str(i) for i in state])] = action 
     return action, memory
