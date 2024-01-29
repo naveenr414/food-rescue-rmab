@@ -20,7 +20,7 @@ whittle_threshold = 1e-4
 value_iteration_threshold = 1e-4
 
 def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
-                        match_prob=0.5):
+                        match_prob=0.5,get_v=False):
     """ value iteration for a single arm at a time
 
     value iteration for the MDP defined by transitions with lambda-adjusted reward function
@@ -70,6 +70,9 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
 
         difference = np.abs(orig_value_func - value_func)
 
+    if get_v:
+        return Q_func[state,:], value_func
+
     # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
     return Q_func[state,:]
 
@@ -90,8 +93,8 @@ def arm_value_v_iteration(transitions, state, predicted_subsidy, discount, thres
     return action corresponding to pi^*(s_I)
     """
 
-    Q_vals = get_q_vals(transitions,state,predicted_subsidy,discount,threshold,reward_function=reward_function,lamb=lamb,match_prob=match_prob)
-    return np.argmax(Q_vals), np.max(Q_vals)
+    Q_vals,v_vals = get_q_vals(transitions,state,predicted_subsidy,discount,threshold,reward_function=reward_function,lamb=lamb,match_prob=match_prob,get_v=True)    
+    return np.argmax(Q_vals), np.max(Q_vals), v_vals 
 
 
 
@@ -466,7 +469,7 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
             return -10
 
         if get_v:
-            action, v_val = arm_value_v_iteration(transitions, state, predicted_subsidy, discount,reward_function=reward_function,lamb=lamb,
+            action, value, v_val = arm_value_v_iteration(transitions, state, predicted_subsidy, discount,reward_function=reward_function,lamb=lamb,
                         match_prob=match_prob)
         else:
             action = arm_value_iteration(transitions, state, predicted_subsidy, discount,reward_function=reward_function,lamb=lamb,
@@ -487,6 +490,6 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
     subsidy = (ub + lb) / 2
 
     if get_v:
-        return subsidy, v_val
+        return subsidy, value, v_val
 
     return subsidy

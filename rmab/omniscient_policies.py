@@ -76,18 +76,20 @@ def whittle_v_index(env,state,budget,lamb,memoizer,reward_function="combined",sh
 
     state_WI = np.zeros((N))
     state_V = np.zeros((N))
+    state_V_full = np.zeros((N,2))
 
     min_chosen_subsidy = -1 
     for i in range(N):
         arm_transitions = true_transitions[i//env.volunteers_per_arm, :, :, 1]
         check_set_val = memoizer.check_set(arm_transitions+round(match_probability_list[i],2), state[i])
         if check_set_val != -1:
-            state_WI[i], state_V[i] = check_set_val
+            state_WI[i], state_V[i], state_V_full[i] = check_set_val
         else:
-            state_WI[i], state_V[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],get_v=True)
-            memoizer.add_set(arm_transitions+round(match_probability_list[i],2), state[i], (state_WI[i],state_V[i]))
+            state_WI[i], state_V[i], state_V_full[i] = arm_value_v_iteration(arm_transitions, state, 0, discount,reward_function=reward_function,lamb=lamb,
+                        match_prob=match_probability_list[i]) #arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],get_v=True)
+            memoizer.add_set(arm_transitions+round(match_probability_list[i],2), state[i], (state_WI[i],state_V[i],state_V_full[i]))
 
-    return state_WI, state_V
+    return state_WI, state_V, state_V_full
 
 
 def shapley_index(env,state,memoizer_shapley = {}):
@@ -375,39 +377,48 @@ def whittle_iterative(env,state,budget,lamb,memory, per_epoch_results):
     else:
         memoizer = memory 
     
-    state_WI_activity, state_V_activity = whittle_v_index(env,state,budget,lamb,memoizer[0],reward_function="activity")
-    state_WI_matching, state_V_matching = whittle_v_index(env,state,budget,lamb,memoizer[1],reward_function="matching")
+    # state_WI_activity, state_V_activity = whittle_v_index(env,state,budget,lamb,memoizer[0],reward_function="activity")
+    state_WI_matching, state_V_matching, state_V_full_matching = whittle_v_index(env,state,budget,lamb,memoizer[1],reward_function="matching")
 
-    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]*state
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
 
     true_transitions = env.transitions 
     max_probabilities = true_transitions[:,1,1,1]
+    probable_future_value = 1
 
     for _ in range(budget):
-        values = [-0.001 for j in range(N)]
-        current_sum_V = np.sum(state_V_matching[list(people_to_add)])
-        current_sum_lambda = np.sum(state_WI_matching[list(people_to_add)]*max_probabilities[list(people_to_add)])
-        current_sum_probabilities = np.sum(match_probabilities[list(people_to_add)])
-        previous_val = 1-np.prod([1-match_probabilities[j] for j in list(people_to_add)])
+        values = [0 for j in range(N)]
+        previous_val = 1-np.prod([1-match_probabilities[j]*state[j] for j in list(people_to_add)])
 
         for i in range(N):
             if i not in people_to_add:
-                current_val = current_sum_probabilities + match_probabilities[i]
-                future_val = current_sum_V + current_sum_lambda*(1/(1-env.discount)-1)
-                future_val += state_V_matching[i] + state_WI_matching[i]*max_probabilities[i]*(1/(1-env.discount)-1)
-                future_val -= current_val 
-                future_val *= env.discount
-                total_val = future_val + current_val 
+                current_val = match_probabilities[i]*state[i]
+                # future_val = state_V_matching[i] + state_WI_matching[i]*max_probabilities[i]*(1/(1-env.discount)-1)
+                # future_val -= current_val 
+                # future_val *= env.discount
+                #future_val = (state_WI_matching[i] - match_probabilities[i])/env.discount 
+                future_val = state_V_full_matching[i,0]*true_transitions[i//env.volunteers_per_arm,state[i],1,0] + state_V_full_matching[i][1]*true_transitions[i//env.volunteers_per_arm,state[i],1,1]
+                future_val -=  state_V_full_matching[i,0]*true_transitions[i//env.volunteers_per_arm,state[i],0,0] + state_V_full_matching[i][1]*true_transitions[i//env.volunteers_per_arm,state[i],0,1]
+                future_val *= env.discount 
 
-                real_current_val = 1-np.prod([1-match_probabilities[j] for j in list(people_to_add)])*(1-match_probabilities[i])
-                total_val *= (real_current_val - previous_val)/(match_probabilities[i])
+                future_match_prob = match_probabilities[i]*true_transitions[i//env.volunteers_per_arm,state[i],1,1]
 
-                if current_val == 0:
-                    total_val = 0
+                real_current_val = 1-np.prod([1-match_probabilities[j]*state[j] for j in list(people_to_add)])*(1-match_probabilities[i])
+                ratio = (real_current_val - previous_val)/(match_probabilities[i]*state[i])
+                ratio_future = (1-probable_future_value*(1-future_match_prob) - (1-probable_future_value))/(future_match_prob)
+                if match_probabilities[i]*state[i] == 0:
+                    ratio = 0
+                if future_match_prob == 0:
+                    ratio_future = 0 
+                total_val = future_val*ratio_future + current_val*ratio  
+                #total_val = future_val*ratio_future + current_val*ratio 
                 values[i] = total_val 
         
         if np.max(values) > 0:
-            people_to_add.add(np.argmax(values))
+            idx = np.argmax(values)
+            people_to_add.add(idx)
+            probable_future_value *= (1-match_probabilities[idx]*true_transitions[
+                idx//env.volunteers_per_arm,state[idx],1,1])
         else:
             break 
 
