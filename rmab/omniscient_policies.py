@@ -323,14 +323,13 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     N = len(state)
 
-    state_rep = binary_to_decimal(state)
+    for s in range(2**16):
+        s_rep = bin(s)[2:].zfill(N)
+        max_val = np.max(Q_vals[s])
+        print("state {} val {}".format(s_rep,max_val))
+    z = 1/0
 
-    for i in range(2**4):
-        s = bin(i)[2:].zfill(N)
-        best_action = np.argmax(Q_vals[i])
-        binary_val = bin(best_action)[2:].zfill(N)
-        print("{} {}".format(s,binary_val))
-    z = 1/0 
+    state_rep = binary_to_decimal(state)
 
     max_action = np.argmax(Q_vals[state_rep])
     binary_val = bin(max_action)[2:].zfill(N)

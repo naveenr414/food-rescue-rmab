@@ -397,7 +397,7 @@ def epsilon_func(n):
 
     return 1/(n+1)**.5
 
-def get_random_index(env,all_match_probs,best_group_arms,policy_by_group,group_indices,num_epochs):
+def get_random_index(env,all_match_probs,best_group_arms,policy_by_group,group_indices,num_epochs,lamb,memoizer,state,budget):
     """Leverage the policy network and heuristics to select a random arm
 
     Arguments:
@@ -422,12 +422,18 @@ def get_random_index(env,all_match_probs,best_group_arms,policy_by_group,group_i
     num_groups = len(group_indices)
 
     for g in range(num_groups):
-        if group_indices[g] >= env.volunteers_per_arm:
+        if group_indices[g] >= len(best_group_arms[g]):
             score_by_group.append(0)
             score_by_group_policy.append(0)
         else:
-            # TODO: Change this to use The Whittle index
-            score_by_group.append(all_match_probs[best_group_arms[g][group_indices[g]]]+0.001)
+            state_WI = whittle_index(env,state,budget,lamb,memoizer)
+            state_WI*=lamb 
+
+            match_probabilities = np.array(env.match_probability_list)[env.agent_idx]*state
+
+            state_WI += match_probabilities
+
+            score_by_group.append(state_WI[best_group_arms[g][group_indices[g]]]+0.001)
             score_by_group_policy.append(max(policy_by_group[g][group_indices[g]],0.001))
 
     # TODO: Be more efficient here
@@ -437,7 +443,7 @@ def get_random_index(env,all_match_probs,best_group_arms,policy_by_group,group_i
     weighted_probabilities = [(1-fraction_policy)*score_by_group[i]/sum_group + fraction_policy*score_by_group_policy[i]/sum_policy for i in range(len(score_by_group_policy))]
 
     selected_index = random.choices(range(len(score_by_group)), weights=weighted_probabilities, k=1)[0]
-    return selected_index
+    return selected_index, memoizer 
 
 def get_total_value(env,all_match_probs,best_group_arms,state,group_indices,value_network,num_future_samples=25):
     """Leverage the value network and reward to get the total value for an action
@@ -461,7 +467,7 @@ def get_total_value(env,all_match_probs,best_group_arms,state,group_indices,valu
     num_groups = len(best_group_arms)
 
     for g in range(num_groups):
-        non_match_prob *= np.prod(1-all_match_probs[best_group_arms[g][0:group_indices[g]]])
+        non_match_prob *= np.prod(1-all_match_probs[best_group_arms[g][0:group_indices[g]]]*state[best_group_arms[g][0:group_indices[g]]])
 
     match_prob = 1-non_match_prob
 
@@ -538,15 +544,22 @@ def get_best_combo(past_prefixes,budget):
     
     Returns: List, best combination of arms to pull"""
 
-    best_combo = [] 
-    best_value = 0
+    combo_list = [] 
+    seen_combos = set()
     for prefix in past_prefixes:
         if len(eval(prefix)) == budget-1:
-            if max(past_prefixes[prefix].values()) > best_value:
-                best_value = max(past_prefixes[prefix].values())
-                best_combo = [index for index in past_prefixes[prefix] if past_prefixes[prefix][index] == best_value][0]
-                best_combo = eval(prefix) + [best_combo]
-    return best_combo 
+            value = max(past_prefixes[prefix].values())
+            combo = [index for index in past_prefixes[prefix] if past_prefixes[prefix][index] == value][0]
+            combo = eval(prefix) + [combo]
+            combo = sorted(combo)
+
+            if ''.join([str(i) for i in combo]) not in seen_combos:
+                combo_list.append((combo,value))
+                seen_combos.add(''.join([str(i) for i in combo]))
+
+    sorted_combos = sorted(combo_list,key=lambda k: k[1])[-3:]
+    return [i[0] for i in sorted_combos]
+
 
 def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1):
     """Compute an MCTS policy by first splitting up into groups
@@ -575,8 +588,9 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1
         policy_network = MLP(len(state),64,len(state),use_sigmoid=True)
         criterion_policy = nn.BCELoss()
         optimizer_policy = optim.SGD(policy_network.parameters(),lr=0.05)
+        memoizer = Memoizer('optimal')
     else:
-        past_states, past_values, past_actions, value_losses, value_network, criterion_value, optimizer_value, policy_network, criterion_policy, optimizer_policy = memory
+        past_states, past_values, past_actions, value_losses, value_network, criterion_value, optimizer_value, policy_network, criterion_policy, optimizer_policy, memoizer = memory
     num_epochs = len(past_states)
     num_iterations = 25
     past_prefixes = {}
@@ -585,15 +599,13 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1
     num_groups = len(state)//env.volunteers_per_arm * 2 
     best_group_arms = []
     all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
-    for g in range(num_groups//2):
+    for g in range(len(state)//env.volunteers_per_arm):
         matching_probs = all_match_probs[g*env.volunteers_per_arm:(g+1)*env.volunteers_per_arm]
         sorted_matching_probs = np.argsort(matching_probs)[::-1] + g*env.volunteers_per_arm
-
         sorted_matching_probs_0 = [i for i in sorted_matching_probs if state[i] == 0]
-        sorted_matching_probs_0 = [i for i in sorted_matching_probs if state[i] == 0]
-
-
-        best_group_arms.append([sorted_matching_probs,sorted_matching_probs])
+        sorted_matching_probs_1 = [i for i in sorted_matching_probs if state[i] == 1]
+        best_group_arms.append(sorted_matching_probs_0)
+        best_group_arms.append(sorted_matching_probs_1)
 
     # Step 2: MCTS iterations
     # Get the probability for pulling each arm, in the same order
@@ -602,6 +614,11 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1
     policy_by_group = []
     for g in range(num_groups):
         policy_by_group.append(policy_network_predictions[best_group_arms[g]])
+
+    if num_epochs > 2000:
+        action = np.zeros(len(state), dtype=np.int8)
+        action[np.argsort(policy_network_predictions)[::-1][:budget]] = 1
+        return action, memory
 
     for _ in range(num_iterations):
         current_combo = [] 
@@ -619,7 +636,7 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1
             should_random = random.random() <= epsilon_func(n)
 
             if should_random:
-                selected_index = get_random_index(env,all_match_probs,best_group_arms,policy_by_group,group_indices,num_epochs)
+                selected_index, memoizer = get_random_index(env,all_match_probs,best_group_arms,policy_by_group,group_indices,num_epochs,lamb,memoizer,state,budget)
             else:
                 scores_current_combo = past_prefixes[repr(current_combo)]
                 selected_index = max(scores_current_combo, key=scores_current_combo.get)
@@ -640,25 +657,32 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1
             past_prefixes[repr(prefix)][next_index] = max(past_prefixes[repr(prefix)][next_index],total_value)
         
     # Step 3: Find the best action/value, and backprop 
-    best_combo = get_best_combo(past_prefixes,budget)
-    
-    group_indices = [0 for i in range(num_groups)]
+    three_best_combos = get_best_combo(past_prefixes,budget)
+    three_values = []
     combo_to_volunteers = []
-    for i in best_combo:
-        combo_to_volunteers.append(best_group_arms[i][group_indices[i]])
-        group_indices[i] += 1
+
+    for combo in three_best_combos:
+        group_indices = [0 for i in range(num_groups)]
+        combo_to_volunteers.append([])
+        for i in combo:
+            combo_to_volunteers[-1].append(best_group_arms[i][group_indices[i]])
+            group_indices[i] += 1
+
+        value = get_total_value(env,all_match_probs,best_group_arms,state,group_indices,value_network,num_future_samples=100)
+        three_values.append(value)
+    
+    best_value = max(three_values)
+    combo_to_volunteers = combo_to_volunteers[np.argmax(three_values)]
 
     action = np.zeros(len(state), dtype=np.int8)
     action[combo_to_volunteers] = 1
-    
-    best_value = get_total_value(env,all_match_probs,best_group_arms,state,group_indices,value_network,num_future_samples=100)
 
     past_states.append(list(state))
     past_values.append(best_value)
     past_actions.append(action)
 
     update_value_policy_network(past_states,past_values,past_actions,value_network,criterion_value,optimizer_value,policy_network,criterion_policy,optimizer_policy,value_losses)
-    memory = past_states, past_values, past_actions, value_losses, value_network, criterion_value, optimizer_value, policy_network, criterion_policy, optimizer_policy 
+    memory = past_states, past_values, past_actions, value_losses, value_network, criterion_value, optimizer_value, policy_network, criterion_policy, optimizer_policy, memoizer
 
     return action, memory 
 
