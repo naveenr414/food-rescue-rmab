@@ -254,7 +254,7 @@ def q_iteration_epoch(env,lamb):
 
     return Q_vals 
 
-def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
+def index_computation_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Q Iteration policy that computes Q values for all combinations of states
     
     Arguments:
@@ -270,13 +270,74 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
     Q_vals = per_epoch_results
     N = len(state)
 
+    indices = np.zeros(N)
     state_rep = binary_to_decimal(state)
+
+    for trial in range(5):
+        for i in range(N):
+            max_index = 10
+            min_index = 0
+
+            for _ in range(20):
+                predicted_index = (max_index+min_index)/2 
+                other_agents = [i_prime for i_prime in range(N) if indices[i_prime]>=predicted_index and i_prime != i]
+                agent_vals = np.array(env.match_probability_list)[env.agent_idx]*state
+
+                other_agents = sorted(other_agents,key=lambda k: agent_vals[k],reverse=True)
+
+                agents_with_i = set(other_agents[:budget-1] + [i])
+                binary_with_i = binary_to_decimal([1 if i in agents_with_i else 0 for i in range(N)])
+                agents_without_i = set(other_agents[:budget-1])
+                binary_without_i = binary_to_decimal([1 if i in agents_without_i else 0 for i in range(N)])
+
+                q_with_i = Q_vals[state_rep,binary_with_i]
+                q_without_i = Q_vals[state_rep,binary_without_i]
+
+                if q_with_i > q_without_i + predicted_index:
+                    min_index = predicted_index 
+                else:
+                    max_index = predicted_index 
+            indices[i] = (max_index+min_index)/2
+        print("For {} indices are {}".format(trial,indices))
+
+    indices = np.argsort(indices)[-budget:][::-1]
+
+    action = np.zeros(N, dtype=np.int8)
+    action[indices] = 1
+    return action, None
+
+def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
+    """Q Iteration policy that computes Q values for all combinations of states
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: The Q Values
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+
+    Q_vals = per_epoch_results
+
+    N = len(state)
+
+    state_rep = binary_to_decimal(state)
+
+    for i in range(2**4):
+        s = bin(i)[2:].zfill(N)
+        best_action = np.argmax(Q_vals[i])
+        binary_val = bin(best_action)[2:].zfill(N)
+        print("{} {}".format(s,binary_val))
+    z = 1/0 
 
     max_action = np.argmax(Q_vals[state_rep])
     binary_val = bin(max_action)[2:].zfill(N)
 
     action = np.zeros(N, dtype=np.int8)
     action = np.array([int(i) for i in binary_val])
+
     return action, None
 
 def greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
@@ -586,6 +647,6 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
     activity_rate = env.total_active/(all_reward.size*env.cohort_size*env.volunteers_per_arm)
 
-    return all_reward, activity_rate 
+    return all_reward, activity_rate
 
 

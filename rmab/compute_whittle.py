@@ -126,7 +126,10 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
     all_s = np.array(list(product([0, 1], repeat=N)))
     all_s = [np.array(i) for i in all_s]
     
-    all_a = list(combinations(range(N), budget))
+    all_a = []
+    for b in range(budget+1):
+        all_a += list(combinations(range(N), b))
+    #all_a = list(combinations(range(N), budget))
     all_a = [np.array(list_to_binary(i,N)) for i in all_a]
 
     def reward_activity(s,a):
