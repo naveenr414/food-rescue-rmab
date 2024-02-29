@@ -44,12 +44,20 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
     min_chosen_subsidy = -1 
     for i in range(N):
         arm_transitions = true_transitions[i//env.volunteers_per_arm, :, :, 1]
-        check_set_val = memoizer.check_set(arm_transitions+round(match_probability_list[i],2), state[i])
+        if reward_function == "activity":
+            check_set_val = memoizer.check_set(arm_transitions, state[i])
+        else:
+            check_set_val = memoizer.check_set(arm_transitions+round(match_probability_list[i],2), state[i])
         if check_set_val != -1:
             state_WI[i] = check_set_val
         else:
             state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i])
-            memoizer.add_set(arm_transitions+round(match_probability_list[i],2), state[i], state_WI[i])
+            if reward_function == "activity":
+                memoizer.add_set(arm_transitions, state[i], state_WI[i])
+            else:
+                memoizer.add_set(arm_transitions+round(match_probability_list[i],2), state[i], state_WI[i])
+    
+            
 
     return state_WI
 
@@ -298,7 +306,6 @@ def index_computation_policy(env,state,budget,lamb,memory,per_epoch_results):
                 else:
                     max_index = predicted_index 
             indices[i] = (max_index+min_index)/2
-        print("For {} indices are {}".format(trial,indices))
 
     indices = np.argsort(indices)[-budget:][::-1]
 
@@ -322,12 +329,6 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
     Q_vals = per_epoch_results
 
     N = len(state)
-
-    for s in range(2**16):
-        s_rep = bin(s)[2:].zfill(N)
-        max_val = np.max(Q_vals[s])
-        print("state {} val {}".format(s_rep,max_val))
-    z = 1/0
 
     state_rep = binary_to_decimal(state)
 
@@ -511,7 +512,7 @@ def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
     else:
         memoizer = memory 
 
-    state_WI = whittle_index(env,state,budget,lamb,memoizer)
+    state_WI = whittle_index(env,state,budget,lamb,memoizer,reward_function="activity")
     state_WI*=lamb 
 
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]*state
