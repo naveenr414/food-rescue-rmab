@@ -167,6 +167,29 @@ def process_two_parameter_data(raw_data,parameter_one,parameter_two):
                 data_by_arm_volunteer[n_arms][n_volunteers][k] = np.mean(data_by_arm_volunteer[n_arms][n_volunteers][k],axis=0)
     return data_by_arm_volunteer
 
+def aggregate_data(results):
+    """Get the average and standard deviation for each key across 
+        multiple trials
+        
+    Arguments: 
+        results: List of dictionaries, one for each seed
+    
+    Returns: Dictionary, with each key mapping to a 
+        tuple with the mean and standard deviation"""
+
+    ret_dict = {}
+    
+    for l in results:
+        for k in l:
+            if type(l[k]) == int or type(l[k]) == float:
+                if k not in ret_dict:
+                    ret_dict[k] = []
+                ret_dict[k].append(l[k])
+    
+    for i in ret_dict:
+        ret_dict[i] = (np.mean(ret_dict[i]),np.std(ret_dict[i]))
+    
+    return ret_dict 
 
 def plot_tradeoff_curve(data,names,nice_names,title):
     """Plot the matching vs. activity tradeoff curve

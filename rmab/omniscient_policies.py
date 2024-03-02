@@ -127,11 +127,13 @@ def shapley_index(env,state,memoizer_shapley = {}):
 
     budget = env.budget 
 
-    # TODO: Fix this later
+    # Fix for when the number of combinations is small (with respect to the budget)
+    # In that scenario, we can essentially just manually compute
     if len(corresponding_probabilities) <= env.budget-1:
         if len(corresponding_probabilities) == 1:
-            return match_probabilities * state, memoizer_shapley 
-        budget = 2
+            return match_probabilities * state, memoizer_shapley
+        else: 
+            budget = 2
 
     for i in range(num_random_combos):
         ones_indices = np.random.choice(len(corresponding_probabilities),budget-1, replace=False)
@@ -365,7 +367,6 @@ def greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
         matching_score = state[i]*match_probabilities[i]
         score_by_agent[i] = matching_score + activity_score * lamb 
 
-    # select arms at random
     selected_idx = np.argsort(score_by_agent)[-budget:][::-1]
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
@@ -516,7 +517,6 @@ def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
     state_WI*=lamb 
 
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]*state
-    match_probabilities /= (1-env.discount)
 
     state_WI += match_probabilities
 
@@ -548,8 +548,7 @@ def shapley_whittle_policy(env,state,budget,lamb,memory, per_epoch_results):
     else:
         memoizer, memoizer_shapley = memory 
         
-
-    state_WI = whittle_index(env,state,budget,lamb,memoizer)
+    state_WI = whittle_index(env,state,budget,lamb,memoizer,reward_function="activity")
     state_WI*=lamb 
 
     shapley_indices, memoizer_shapley = shapley_index(env,state,memoizer_shapley)
@@ -561,8 +560,6 @@ def shapley_whittle_policy(env,state,budget,lamb,memory, per_epoch_results):
     action[sorted_WI[:budget]] = 1
 
     return action, (memoizer, memoizer_shapley)
-
-
 
 def random_policy(env,state,budget,lamb,memory, per_epoch_results):
     """Random policy that randomly notifies budget arms
@@ -587,7 +584,7 @@ def random_policy(env,state,budget,lamb,memory, per_epoch_results):
 
 
 
-def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_epoch_function=None,lamb=0):
+def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_epoch_function=None,lamb=0,get_memory=False):
     """Wrapper to run policies without needing to go through boilerplate code
     
     Arguments:
@@ -647,6 +644,8 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
     activity_rate = env.total_active/(all_reward.size*env.cohort_size*env.volunteers_per_arm)
 
+    if get_memory:
+        return all_reward, activity_rate, memory
     return all_reward, activity_rate
 
 
