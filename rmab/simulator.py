@@ -33,7 +33,7 @@ class RMABSimulator(gym.Env):
     '''
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
-            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],TIME_PER_RUN=10.0):
+            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],TIME_PER_RUN=10.0,contextual=False,context_dim=2):
         '''
         Initialization
         '''
@@ -52,9 +52,13 @@ class RMABSimulator(gym.Env):
         self.reward_style = reward_style # Should we get reward style based on states or matches
         self.match_probability_list = match_probability_list
         self.TIME_PER_RUN = TIME_PER_RUN
+        self.contextual = contextual
+        self.context_dim = context_dim
 
         if self.match_probability_list == []:
             self.match_probability_list = [match_probability for i in range(self.cohort_size * self.volunteers_per_arm)]
+
+        self.match_probability_list = np.array(self.match_probability_list)
 
         assert_valid_transition(all_transitions)
 
@@ -99,8 +103,7 @@ class RMABSimulator(gym.Env):
         # current state initialization
         self.timestep    = 0
         self.states      = self.first_init_states[self.instance_count, self.episode_count, :]  # np.copy??
-
-
+        self.context = generate_random_context(self.context_dim)
         return self.observe()
 
     def reset(self):
@@ -129,6 +132,7 @@ class RMABSimulator(gym.Env):
         # Current state initialization
         self.timestep    = 0
         self.states      = self.sample_initial_states(self.cohort_size)
+        self.context = generate_random_context(self.context_dim)
 
         return self.observe()
 
@@ -169,6 +173,7 @@ class RMABSimulator(gym.Env):
                 next_state = np.random.choice(a=self.number_states, p=prob)
                 next_states[idx] = next_state
 
+        self.context = generate_random_context(self.context_dim)
         self.states = next_states.astype(int)
         self.timestep += 1
 
@@ -186,14 +191,11 @@ class RMABSimulator(gym.Env):
                 return 0
             else:
                 self.total_active += np.sum(self.states)
-                # TODO: Make sure this is correct
-                prod_state = 1-self.states*action*np.array(self.match_probability_list)[self.agent_idx]
-
+                if self.contextual:
+                    prod_state = [(1-(self.match_probability_list[self.agent_idx[i]].dot(self.context)*action[i]*self.states[i])**2) for i in range(len(self.agent_idx))]
+                else:
+                    prod_state = 1-self.states*action*np.array(self.match_probability_list)[self.agent_idx]
                 prob_all_inactive = np.prod(prod_state)
-
-
-                # for i in range(len(self.states)):
-                #     prob_all_inactive *= (1-self.states[i]*action[i]*np.array(self.match_probability_list)[self.agent_idx][i])                
                 return 1-prob_all_inactive 
 
 class RMABSimulatorOpenRL(gym.Env):
@@ -414,6 +416,18 @@ def random_transition(all_population, n_states, n_actions):
     all_transitions = np.random.random((all_population, n_states, n_actions, n_states))
     all_transitions = all_transitions / np.sum(all_transitions, axis=-1, keepdims=True)
     return all_transitions
+
+def generate_random_context(ndim):
+    """Generate a random vector on the surface
+        of an ndim unit sphere
+        
+    Arguments:
+        ndim: How many dimensions vector should have
+
+    Returns: Numpy vector of size ndim"""
+    vec = np.random.randn(ndim)
+    vec /= np.linalg.norm(vec, axis=0)
+    return vec
 
 
 def assert_valid_transition(transitions):

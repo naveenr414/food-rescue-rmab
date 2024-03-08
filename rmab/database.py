@@ -59,3 +59,4 @@ def close_connection(connection, cursor):
 
     cursor.close()
     connection.close()
+

@@ -20,7 +20,7 @@ from mcts import mcts
 import random 
 import time
 
-def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shapley_values=None):
+def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shapley_values=None,contextual=False):
     """Get the Whittle indices for each agent in a given state
     
     Arguments:
@@ -36,6 +36,9 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
 
     if shapley_values != None:
         match_probability_list = np.array(shapley_values)
+
+    if contextual:
+        match_probability_list = [(i.dot(i))**2 for i in match_probability_list]
 
     true_transitions = env.transitions 
     discount = env.discount 
@@ -208,7 +211,38 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
     action[sorted_WI[:budget]] = 1
 
     return action, memoizer 
- 
+
+def whittle_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
+    """Whittle index policy based on computing the subsidy for each arm
+    This approximates the problem as the sum of Linear rewards, then 
+    Decomposes the problem into the problem for each arm individually
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Information on previously computed Whittle indices, the memoizer
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+
+    N = len(state) 
+
+    if memory == None:
+        memoizer = Memoizer('optimal')
+    else:
+        memoizer = memory 
+
+    state_WI = whittle_index(env,state,budget,lamb,memoizer,contextual=True)
+
+    sorted_WI = np.argsort(state_WI)[::-1]
+    action = np.zeros(N, dtype=np.int8)
+    action[sorted_WI[:budget]] = 1
+
+    return action, memoizer 
+
+
 def whittle_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Whittle index policy based on computing the subsidy for each arm
     This approximates the problem as the sum of Linear rewards, then 
@@ -339,6 +373,38 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     action = np.zeros(N, dtype=np.int8)
     action = np.array([int(i) for i in binary_val])
+
+    return action, None
+
+def greedy_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
+    """Greedy policy that selects the budget highest values
+        of state*match_probability + activity_score * lamb
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+
+    N = len(state)
+
+    score_by_agent = [0 for i in range(N)]
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+
+    for i in range(N):
+        activity_score = np.sum(state)
+        
+        matching_score = state[i]*match_probabilities[i]
+        matching_score = (matching_score.dot(env.context))**2
+        score_by_agent[i] = matching_score + activity_score * lamb 
+
+    selected_idx = np.argsort(score_by_agent)[-budget:][::-1]
+    action = np.zeros(N, dtype=np.int8)
+    action[selected_idx] = 1
 
     return action, None
 
@@ -492,6 +558,7 @@ def whittle_iterative(env,state,budget,lamb,memory, per_epoch_results):
     return action, memoizer 
 
 
+
 def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
     """Combination of the Whittle index + match probability
     
@@ -525,6 +592,43 @@ def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
     action[sorted_WI[:budget]] = 1
 
     return action, memoizer 
+
+def whittle_greedy_contextual_policy(env,state,budget,lamb,memory, per_epoch_results):
+    """Combination of the Whittle index + match probability
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and the Whittle memoizer"""
+
+
+    N = len(state) 
+
+    if memory == None:
+        memoizer = Memoizer('optimal')
+    else:
+        memoizer = memory 
+
+    state_WI = whittle_index(env,state,budget,lamb,memoizer,reward_function="activity")
+    state_WI*=lamb 
+
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    match_probabilities = np.array([(i.dot(env.context))**2 for i in match_probabilities])
+    match_probabilities *= state
+
+    state_WI += match_probabilities
+
+    sorted_WI = np.argsort(state_WI)[::-1]
+    action = np.zeros(N, dtype=np.int8)
+    action[sorted_WI[:budget]] = 1
+
+    return action, memoizer 
+
 
 def shapley_whittle_policy(env,state,budget,lamb,memory, per_epoch_results):
     """Combination of the Whittle index + Shapley values
@@ -582,9 +686,44 @@ def random_policy(env,state,budget,lamb,memory, per_epoch_results):
 
     return action, None
 
+def contextual_future_policy(env,state,budget,lamb,memory, per_epoch_results):
+    """Select the policy which maximizes arm heterogenetiy
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
 
 
-def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_epoch_function=None,lamb=0,get_memory=False):
+    N = len(state)
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    
+    values_by_combo = []
+
+    for i in range(len(match_probabilities)):
+        for j in range(i+1,len(match_probabilities)):
+            prob_i = match_probabilities[i].dot(env.context)**2*state[i] 
+            prob_j = match_probabilities[j].dot(env.context)**2*state[j]
+            current_value = 1-(1-prob_i)*(1-prob_j)
+            future_value = -1*np.abs(match_probabilities[i].dot(match_probabilities[j]))
+            values_by_combo.append((current_value+future_value,i,j))
+
+    values_by_combo = sorted(values_by_combo,key=lambda k: k[0])[::-1]
+    i,j = values_by_combo[0][1], values_by_combo[0][2]
+    action = np.zeros(N, dtype=np.int8)
+    action[i] = 1
+    action[j] = 1
+
+    return action, None
+
+
+
+def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_epoch_function=None,lamb=0,get_memory=False,should_train=False,test_T=0):
     """Wrapper to run policies without needing to go through boilerplate code
     
     Arguments:
@@ -611,13 +750,21 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
     random.seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
 
     env.reset_all()
 
-    all_reward = np.zeros((n_epochs, T))
+    if should_train:
+        all_reward = np.zeros((n_epochs,test_T))
+    else:
+        all_reward = np.zeros((n_epochs, T))
 
-    start = time.time()
+    inference_time_taken = 0
+
     for epoch in range(n_epochs):
+        if not should_train:
+            start = time.time()
+
         if epoch != 0: env.reset_instance()
         first_state = env.observe()
         if len(first_state)>20:
@@ -638,9 +785,19 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
             if done and t+1 < T: env.reset()
 
-            all_reward[epoch, t] = reward
-    print("Took {} time".format(time.time()-start))
-    env.time_taken = time.time()-start
+            if should_train:
+                if t == T-test_T:
+                    start = time.time()
+
+                if t < (T-test_T):
+                    env.total_active = 0
+                else:
+                    all_reward[epoch, t-(T-test_T)] = reward
+            else:
+                all_reward[epoch, t] = reward
+        inference_time_taken += time.time()-start 
+    print("Took {} time".format(inference_time_taken))
+    env.time_taken = inference_time_taken
 
     activity_rate = env.total_active/(all_reward.size*env.cohort_size*env.volunteers_per_arm)
 

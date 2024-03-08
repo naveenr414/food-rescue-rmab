@@ -2,6 +2,8 @@ import numpy as np
 from datetime import timedelta 
 from rmab.database import run_query, open_connection, close_connection 
 import rmab.secret as secret 
+import random 
+import json
 
 def get_data_all_users(cursor):
     """Retrieve the list of rescue times by user, stored in a dictionary
@@ -146,3 +148,300 @@ def compute_days_till(data_by_user,num_rescues=-1):
         differences_between.append(total_diff)
 
     return differences_between 
+
+
+
+def get_match_probs(cohort_idx): 
+    """Get real matching probabilities based on a cohort
+    
+    Arguments:
+        cohort_idx: List of volunteers, based on the number of trips completed
+        
+    Returns: Match probabilities, list of floats between 0-1"""
+    
+    def haversine(lat1, lon1, lat2, lon2):
+        import math
+        """
+        Calculate the great circle distance between two points 
+        on the earth (specified in decimal degrees)
+        """
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        r = 3956
+        return r * c
+
+    db_name = secret.database_name 
+    username = secret.database_username 
+    password = secret.database_password 
+    ip_address = secret.ip_address
+    port = secret.database_port
+    connection_dict = open_connection(db_name,username,password,ip_address,port)
+    connection = connection_dict['connection']
+    cursor = connection_dict['cursor']
+
+    query = "SELECT * FROM RESCUES"
+    all_rescue_data = run_query(cursor,query)
+
+    query = ("SELECT * FROM ADDRESSES")
+    all_addresses = run_query(cursor,query)
+    len(all_addresses)
+
+    address_id_to_latlon = {}
+    address_id_to_state = {}
+    for i in all_addresses:
+        address_id_to_state[i['id']] = i['state']
+        address_id_to_latlon[i['id']] = (i['latitude'],i['longitude'])
+
+    user_id_to_latlon = {}
+    user_id_to_state = {}
+    user_id_to_start = {}
+    user_id_to_end = {}
+
+    query = ("SELECT * FROM USERS")
+    user_data = run_query(cursor,query)
+
+    for user in user_data:
+        if user['address_id'] != None: 
+            user_id_to_latlon[user['id']] = address_id_to_latlon[user['address_id']]
+            user_id_to_state[user['id']] = address_id_to_state[user['address_id']]
+            user_id_to_start[user['id']] = user['created_at']
+            user_id_to_end[user['id']] = user['updated_at']
+
+
+    query = (
+        "SELECT * "
+        "FROM RESCUES "
+        "WHERE PUBLISHED_AT <= CURRENT_DATE "
+        "AND USER_ID IS NOT NULL "
+    )
+
+    all_user_published = run_query(cursor,query)
+
+    query = (
+        "SELECT * FROM donor_locations"
+    )
+    data = run_query(cursor,query)
+    donor_location_to_latlon = {}
+    for i in data:
+        donor_location_to_latlon[i['id']] = address_id_to_latlon[i['address_id']]
+
+    query = (
+        "SELECT * FROM donations"
+    )
+    donation_data = run_query(cursor,query)
+
+    donation_id_to_latlon = {}
+    for i in donation_data:
+        donation_id_to_latlon[i['id']] = donor_location_to_latlon[i['donor_location_id']]
+
+    query = (
+        "SELECT USER_ID, PUBLISHED_AT "
+        "FROM RESCUES "
+        "WHERE PUBLISHED_AT <= CURRENT_DATE "
+        "AND USER_ID IS NOT NULL "
+    )
+
+    all_user_published = run_query(cursor,query)
+
+    data_by_user = {}
+    for i in all_user_published:
+        user_id = i['user_id']
+        published_at = i['published_at']
+
+        if user_id not in data_by_user:
+            data_by_user[user_id] = []
+
+        data_by_user[user_id].append(published_at)
+
+    num_rescues_to_user_id = {}
+    for i in data_by_user:
+        if len(data_by_user[i]) not in num_rescues_to_user_id:
+            num_rescues_to_user_id[len(data_by_user[i])] = []
+        num_rescues_to_user_id[len(data_by_user[i])].append(i)
+
+    rescue_to_latlon = {}
+    rescue_to_time = {}
+    for i in all_rescue_data:
+        if i['published_at'] != None and donation_id_to_latlon[i['donation_id']] != None and donation_id_to_latlon[i['donation_id']][0] != None:
+            rescue_to_latlon[i['id']] = donation_id_to_latlon[i['donation_id']]
+            rescue_to_latlon[i['id']] = (float(rescue_to_latlon[i['id']][0]),float(rescue_to_latlon[i['id']][1]))
+            rescue_to_time[i['id']] = i['published_at']
+
+    def num_notifications(user_id):
+        user_location = user_id_to_latlon[user_id]
+        if user_location[0] == None:
+            return 0
+        user_location = (float(user_location[0]),float(user_location[1]))
+        user_start = user_id_to_start[user_id]
+        user_end = user_id_to_end[user_id]
+
+        relevant_rescues = [i for i in rescue_to_time if user_start <= rescue_to_time[i] and rescue_to_time[i] <= user_end]
+        relevant_rescues = [i for i in relevant_rescues if haversine(user_location[0],user_location[1],rescue_to_latlon[i][0],rescue_to_latlon[i][1]) < 5]
+        return len(relevant_rescues)
+
+    temp_dict = json.load(open("../results/food_rescue/match_probs.json","r"))
+    all_match_probs = {}
+    for i in temp_dict:
+        all_match_probs[int(i)] = temp_dict[i]
+
+    for i in num_rescues_to_user_id:
+        num_rescues_to_user_id[i] = [j for j in num_rescues_to_user_id[i] if j in all_match_probs]
+
+    match_probs = []
+    for i in cohort_idx:
+        random_id = random.choice(num_rescues_to_user_id[i])
+        while random_id not in all_match_probs:
+            random_id = random.choice(num_rescues_to_user_id[i])
+        match_probs.append(all_match_probs[random_id])
+    return match_probs
+
+def get_dict_match_probs(): 
+    """Get real matching probabilities based on a cohort
+    
+    Arguments:
+        cohort_idx: List of volunteers, based on the number of trips completed
+        
+    Returns: Match probabilities, list of floats between 0-1"""
+    
+    def haversine(lat1, lon1, lat2, lon2):
+        import math
+        """
+        Calculate the great circle distance between two points 
+        on the earth (specified in decimal degrees)
+        """
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        r = 3956
+        return r * c
+
+    db_name = secret.database_name 
+    username = secret.database_username 
+    password = secret.database_password 
+    ip_address = secret.ip_address
+    port = secret.database_port
+    connection_dict = open_connection(db_name,username,password,ip_address,port)
+    connection = connection_dict['connection']
+    cursor = connection_dict['cursor']
+
+    query = "SELECT * FROM RESCUES"
+    all_rescue_data = run_query(cursor,query)
+
+    query = ("SELECT * FROM ADDRESSES")
+    all_addresses = run_query(cursor,query)
+    len(all_addresses)
+
+    address_id_to_latlon = {}
+    address_id_to_state = {}
+    for i in all_addresses:
+        address_id_to_state[i['id']] = i['state']
+        address_id_to_latlon[i['id']] = (i['latitude'],i['longitude'])
+
+    user_id_to_latlon = {}
+    user_id_to_state = {}
+    user_id_to_start = {}
+    user_id_to_end = {}
+
+    query = ("SELECT * FROM USERS")
+    user_data = run_query(cursor,query)
+
+    for user in user_data:
+        if user['address_id'] != None: 
+            user_id_to_latlon[user['id']] = address_id_to_latlon[user['address_id']]
+            user_id_to_state[user['id']] = address_id_to_state[user['address_id']]
+            user_id_to_start[user['id']] = user['created_at']
+            user_id_to_end[user['id']] = user['updated_at']
+
+
+    query = (
+        "SELECT * "
+        "FROM RESCUES "
+        "WHERE PUBLISHED_AT <= CURRENT_DATE "
+        "AND USER_ID IS NOT NULL "
+    )
+
+    all_user_published = run_query(cursor,query)
+
+    query = (
+        "SELECT * FROM donor_locations"
+    )
+    data = run_query(cursor,query)
+    donor_location_to_latlon = {}
+    for i in data:
+        donor_location_to_latlon[i['id']] = address_id_to_latlon[i['address_id']]
+
+    query = (
+        "SELECT * FROM donations"
+    )
+    donation_data = run_query(cursor,query)
+
+    donation_id_to_latlon = {}
+    for i in donation_data:
+        donation_id_to_latlon[i['id']] = donor_location_to_latlon[i['donor_location_id']]
+
+    query = (
+        "SELECT USER_ID, PUBLISHED_AT "
+        "FROM RESCUES "
+        "WHERE PUBLISHED_AT <= CURRENT_DATE "
+        "AND USER_ID IS NOT NULL "
+    )
+
+    all_user_published = run_query(cursor,query)
+
+    data_by_user = {}
+    for i in all_user_published:
+        user_id = i['user_id']
+        published_at = i['published_at']
+
+        if user_id not in data_by_user:
+            data_by_user[user_id] = []
+
+        data_by_user[user_id].append(published_at)
+
+    num_rescues_to_user_id = {}
+    for i in data_by_user:
+        if len(data_by_user[i]) not in num_rescues_to_user_id:
+            num_rescues_to_user_id[len(data_by_user[i])] = []
+        num_rescues_to_user_id[len(data_by_user[i])].append(i)
+
+    rescue_to_latlon = {}
+    rescue_to_time = {}
+    for i in all_rescue_data:
+        if i['published_at'] != None and donation_id_to_latlon[i['donation_id']] != None and donation_id_to_latlon[i['donation_id']][0] != None:
+            rescue_to_latlon[i['id']] = donation_id_to_latlon[i['donation_id']]
+            rescue_to_latlon[i['id']] = (float(rescue_to_latlon[i['id']][0]),float(rescue_to_latlon[i['id']][1]))
+            rescue_to_time[i['id']] = i['published_at']
+
+    def num_notifications(user_id):
+        if user_id not in user_id_to_latlon:
+            return 0
+        user_location = user_id_to_latlon[user_id]
+        if user_location[0] == None:
+            return 0
+        user_location = (float(user_location[0]),float(user_location[1]))
+        user_start = user_id_to_start[user_id]
+        user_end = user_id_to_end[user_id]
+
+        relevant_rescues = [i for i in rescue_to_time if user_start <= rescue_to_time[i] and rescue_to_time[i] <= user_end]
+        relevant_rescues = [i for i in relevant_rescues if haversine(user_location[0],user_location[1],rescue_to_latlon[i][0],rescue_to_latlon[i][1]) < 5]
+        return len(relevant_rescues)
+
+    id_to_match_prob = {}
+
+    num_done = 0
+    for i in num_rescues_to_user_id:
+        num_done += 1
+        if num_done % 10 == 0:
+            print("Done with {} out of {}".format(num_done,len(num_rescues_to_user_id)))
+        for _id in num_rescues_to_user_id[i]:
+            notifications = num_notifications(_id)
+            if notifications < 1000:
+                id_to_match_prob[_id] = 0 
+            else:
+                id_to_match_prob[_id] = i/notifications 
+    return id_to_match_prob

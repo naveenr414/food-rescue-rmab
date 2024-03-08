@@ -424,8 +424,6 @@ def get_random_index(env,all_match_probs,best_group_arms,policy_by_group,group_i
 
     randomness_boost = 0.2
 
-    start = time.time()
-
     for g in range(num_groups):
         if group_indices[g] >= len(best_group_arms[g]):
             score_by_group.append(0)
@@ -434,12 +432,10 @@ def get_random_index(env,all_match_probs,best_group_arms,policy_by_group,group_i
             score_by_group.append(state_WI[best_group_arms[g][group_indices[g]]]+randomness_boost)
             score_by_group_policy.append(max(policy_by_group[g][group_indices[g]],0.001))
 
-    # TODO: Be more efficient here
     fraction_policy = 1 - epsilon_func(num_epochs)
     sum_group = sum(score_by_group)
     sum_policy = sum(score_by_group_policy)
     weighted_probabilities = [(1-fraction_policy)*score_by_group[i]/sum_group + fraction_policy*score_by_group_policy[i]/sum_policy for i in range(len(score_by_group_policy))]
-    start = time.time()
 
     selected_index = random.choices(range(len(score_by_group)), weights=weighted_probabilities, k=1)[0]
     return selected_index, memoizer 
@@ -507,7 +503,7 @@ def get_total_value(env,all_match_probs,best_group_arms,state,group_indices,valu
     return total_value 
 
 def update_value_policy_network(past_states,past_values,past_actions,value_losses,value_network,criterion_value,optimizer_value,
-                                    policy_losses,policy_network,criterion_policy,optimizer_policy):
+                                    policy_losses,policy_network,criterion_policy,optimizer_policy,past_window=100):
     """Run backprop on the Value and Policy Networks
     
     Arguments:
@@ -516,9 +512,9 @@ def update_value_policy_network(past_states,past_values,past_actions,value_losse
         value_network: PyTorch model mapping states to float values
         criterion_value: MSE Loss, used for loss computation
         optimizer_value: SGD Optimizer for the value network
-        policy_network: PyTorch model mapping states to action probabilities
+        policy_networks: List of PyTorch models mapping states to action probabilities
         criterion_policy: BCE Loss, used for loss computation
-        optimizer_policy: SGD Optimizer for the policy network
+        optimizers_policy: List of SGD Optimizer for the policy network
         value_losses: List of losses from the value network; used for debugging
         policy_losses: List of losses from the policy network; used for debugging
     
@@ -539,17 +535,31 @@ def update_value_policy_network(past_states,past_values,past_actions,value_losse
     loss_value.backward()
     optimizer_value.step()
 
-    random_point = random.randint(max(0,len(past_states)-100),len(past_states)-1)
+    random_point = random.randint(max(0,len(past_states)-past_window),len(past_states)-1)
     input_data = torch.Tensor(past_states[random_point])
     target = torch.Tensor(past_actions[random_point])
-    output = policy_network(input_data)
-    loss_policy = criterion_policy(output,target)
 
-    optimizer_policy.zero_grad()  
-    loss_policy.backward()  
-    optimizer_policy.step()  
+    if type(policy_network) == type([]):
+        total_policy_loss = 0
+        for i in range(len(policy_network)):
+            output = policy_network[i](input_data)
+            loss_policy = criterion_policy(output,target[i:i+1])
+
+            optimizer_policy[i].zero_grad()  
+            loss_policy.backward()  
+            optimizer_policy[i].step() 
+            total_policy_loss += loss_policy.item()
+    else:
+        output = policy_network(input_data)
+        loss_policy = criterion_policy(output,target)
+
+        optimizer_policy.zero_grad()  
+        loss_policy.backward()  
+        optimizer_policy.step() 
+        total_policy_loss = loss_policy.item() 
+
     value_losses.append(loss_value.item())
-    policy_losses.append(loss_policy.item())
+    policy_losses.append(total_policy_loss)
 
 def get_best_combo(last_prefixes):
     """Using the data we've seen from the MCTS run, determine which combo of arms to pull
@@ -586,11 +596,15 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1
         timeLimit: Optional, max time we can run for
     """
 
-    num_iterations = 25
-    exploration_const = 5
+    num_iterations = env.mcts_train_iterations
+    exploration_const = 10
+    past_window = 100
+    policy_lr = 1e-2
     past_prefixes = {}
     last_prefixes = {}
     best_score = 0
+    train_epochs = 1500
+    use_individual_mlp = True 
 
     # Initialize the memory 
     if memory == None:
@@ -602,10 +616,15 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1
         value_network = MLP(len(state), 64, 1)
         criterion_value = nn.MSELoss()
         optimizer_value = optim.SGD(value_network.parameters(), lr=0.01)
-        policy_network = MLP(len(state),64,len(state),use_sigmoid=True)
         criterion_policy = nn.BCELoss()
-        optimizer_policy = optim.SGD(policy_network.parameters(),lr=0.01)
         memoizer = Memoizer('optimal')
+
+        if use_individual_mlp:
+            policy_network = [MLP(len(state),64,1,use_sigmoid=True) for i in range(len(state))]
+            optimizer_policy = [optim.Adam(m.parameters(),lr=policy_lr) for m in policy_network]
+        else:
+            policy_network = MLP(len(state),64,len(state),use_sigmoid=True)
+            optimizer_policy = optim.Adam(policy_network.parameters(),lr=policy_lr)
     else:
         past_states, past_values, past_actions, \
         value_losses, value_network, criterion_value, optimizer_value, \
@@ -629,23 +648,42 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1
     # Step 2: MCTS iterations
     # Get the probability for pulling each arm, in the same order
     # As the 'best_group_arms' variable
-    policy_network_predictions = policy_network(torch.Tensor([state])).detach().numpy()[0]
+    if use_individual_mlp:
+        policy_network_predictions = np.array([m(torch.Tensor([state])).detach().numpy()[0][0] for m in policy_network])
+    else:
+        policy_network_predictions = np.array(policy_network(torch.Tensor([state])).detach().numpy()[0])
     policy_by_group = []
     for g in range(num_groups):
         policy_by_group.append(policy_network_predictions[best_group_arms[g]])
 
+    action = np.zeros(len(state), dtype=np.int8)
+    action[np.argsort(policy_network_predictions)[::-1][:budget]] = 1
+    group_indices = [0 for i in range(num_groups)]
+    full_combo = []
+    for g in range(num_groups):
+        for i in best_group_arms[g]:
+            if action[i] == 1:
+                group_indices[g] += 1
+                full_combo.append(g)
+    full_combo = sorted(full_combo)
+
+    total_value = get_total_value(env,all_match_probs,best_group_arms,state,group_indices,value_network,lamb,num_future_samples=25)
+    best_score = max(best_score,total_value)
+    full_combo_string = repr(full_combo)
+    last_prefixes[full_combo_string] = [total_value]
+
     # Once our models are sufficiently trained, we can just use them for pulling arms
-    if num_epochs > 3000:
-        action = np.zeros(len(state), dtype=np.int8)
-        action[np.argsort(policy_network_predictions)[::-1][:budget]] = 1
-        return action, memory
+    # TODO: Add this back in 
+    # if num_epochs >= train_epochs:
+    #     action = np.zeros(len(state), dtype=np.int8)
+    #     action[np.argsort(policy_network_predictions)[::-1][:budget]] = 1
+    #     return action, memory
+
+    if num_epochs >= train_epochs:
+        num_iterations = env.mcts_test_iterations
 
     # Used to efficiently compute heuristics 
-    # TODO: Change this back to activity + match prob
     state_WI = whittle_index(env,state,budget,lamb,memoizer)
-    # state_WI*=lamb 
-    # match_probabilities = np.array(env.match_probability_list)[env.agent_idx]*state
-    # state_WI += match_probabilities
 
     # Main MCTS loop
     for _ in range(num_iterations):
@@ -736,7 +774,7 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1
     past_states.append(list(state))
     past_values.append(best_value)
     past_actions.append(action)
-    update_value_policy_network(past_states,past_values,past_actions,value_losses,value_network,criterion_value,optimizer_value,policy_losses,policy_network,criterion_policy,optimizer_policy)
+    update_value_policy_network(past_states,past_values,past_actions,value_losses,value_network,criterion_value,optimizer_value,policy_losses,policy_network,criterion_policy,optimizer_policy,past_window=past_window)
     memory = past_states, past_values, past_actions, value_losses, value_network, criterion_value, optimizer_value, policy_losses, policy_network, criterion_policy, optimizer_policy, memoizer
 
     return action, memory 
