@@ -20,7 +20,7 @@ whittle_threshold = 1e-4
 value_iteration_threshold = 1e-4
 
 def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
-                        match_prob=0.5,get_v=False):
+                        match_prob=0.5,get_v=False,num_arms=1):
     """ value iteration for a single arm at a time
 
     value iteration for the MDP defined by transitions with lambda-adjusted reward function
@@ -41,7 +41,7 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
         return s*a*match_prob - a*predicted_subsidy 
 
     def combined_reward(s,a):
-        return s*a*match_prob + lamb*s - a*predicted_subsidy 
+        return s*a*match_prob*(1-lamb) + lamb*s/num_arms - a*predicted_subsidy 
 
     while np.max(difference) >= threshold:
         iters += 1
@@ -77,13 +77,13 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
     return Q_func[state,:]
 
 def arm_value_iteration(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
-                        match_prob=0.5):
+                        match_prob=0.5,num_arms=1):
     """ value iteration for a single arm at a time
 
     value iteration for the MDP defined by transitions with lambda-adjusted reward function
     return action corresponding to pi^*(s_I)
     """
-    return np.argmax(get_q_vals(transitions,state,predicted_subsidy,discount,threshold,reward_function=reward_function,lamb=lamb,match_prob=match_prob))
+    return np.argmax(get_q_vals(transitions,state,predicted_subsidy,discount,threshold,reward_function=reward_function,lamb=lamb,match_prob=match_prob,num_arms=num_arms))
 
 def arm_value_v_iteration(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
                         match_prob=0.5):
@@ -139,7 +139,7 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
         return (1-np.prod(np.power(1-match_probability_list,s*a)))
         
     def reward_combined(s,a):
-        return (1-np.prod(np.power(1-match_probability_list,s*a))) + lamb*np.sum(s)
+        return (1-np.prod(np.power(1-match_probability_list,s*a)))*(1-lamb) + lamb*np.sum(s)/len(s)
 
     if reward_function == 'activity':
         r = reward_activity
@@ -215,12 +215,12 @@ def arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy,
         if T>0 and a == s == 1:
             orig_T = T
             T = min(T,budget)
-            return (1-np.power(1-p,T))/orig_T + lamb*s - a*predicted_subsidy 
+            return (1-np.power(1-p,T))/orig_T*(1-lamb) + lamb*s - a*predicted_subsidy 
             # return (1-np.power(1-p,T) - (1-np.power(1-p,T-1))) + lamb*s - a*predicted_subsidy
         elif T == 0 and a==s==1:
             return 0
         else:
-            return s*a + lamb*s - a*predicted_subsidy 
+            return s*a*(1-lamb) + lamb*s - a*predicted_subsidy 
 
     # binom_pmfs = [1,1,1,1,1,1,1]
     # binom_pmfs = np.array(binom_pmfs)/np.sum(binom_pmfs)
@@ -331,7 +331,7 @@ def arm_value_iteration_neural(all_transitions, discount, budget, match_prob, th
         if torch.sum(a) > budget:
             return -10000
 
-        return (1-torch.pow(1-p,s.dot(a))) + lamb*torch.sum(s)
+        return (1-torch.pow(1-p,s.dot(a)))*(1-lamb) + lamb*torch.sum(s)/len(s)
 
     if reward_function == 'activity':
         r = reward_activity
@@ -449,7 +449,7 @@ def arm_compute_whittle_sufficient(transitions, state, T_stat,discount, subsidy_
     subsidy = (ub + lb) / 2
     return subsidy
 
-def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0,match_prob=0.5,match_probability_list=[],get_v=False):
+def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0,match_prob=0.5,match_probability_list=[],get_v=False,num_arms=1):
     """
     compute whittle index for a single arm using binary search
 
@@ -476,7 +476,7 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
                         match_prob=match_prob)
         else:
             action = arm_value_iteration(transitions, state, predicted_subsidy, discount,reward_function=reward_function,lamb=lamb,
-                        match_prob=match_prob)
+                        match_prob=match_prob,num_arms=num_arms)
 
         if action == 0:
             # optimal action is passive: subsidy is too high

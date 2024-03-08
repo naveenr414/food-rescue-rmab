@@ -19,6 +19,7 @@ from copy import deepcopy
 from mcts import mcts
 import random 
 import time
+import scipy
 
 def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shapley_values=None,contextual=False):
     """Get the Whittle indices for each agent in a given state
@@ -54,7 +55,7 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
         if check_set_val != -1:
             state_WI[i] = check_set_val
         else:
-            state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i])
+            state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],num_arms=len(state))
             if reward_function == "activity":
                 memoizer.add_set(arm_transitions, state[i], state_WI[i])
             else:
@@ -97,7 +98,7 @@ def whittle_v_index(env,state,budget,lamb,memoizer,reward_function="combined",sh
             state_WI[i], state_V[i], state_V_full[i] = check_set_val
         else:
             state_WI[i], state_V[i], state_V_full[i] = arm_value_v_iteration(arm_transitions, state, 0, discount,reward_function=reward_function,lamb=lamb,
-                        match_prob=match_probability_list[i]) #arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],get_v=True)
+                        match_prob=match_probability_list[i]) 
             memoizer.add_set(arm_transitions+round(match_probability_list[i],2), state[i], (state_WI[i],state_V[i],state_V_full[i]))
 
     return state_WI, state_V, state_V_full
@@ -113,7 +114,6 @@ def shapley_index(env,state,memoizer_shapley = {}):
         memoizer_shapley: Dictionary, to store previously computed Shapley indices
         
     Returns: Two things, shapley index, and updated dictionary"""
-
     shapley_indices = [0 for i in range(len(state))]
     state_str = "".join([str(i) for i in state])
 
@@ -124,7 +124,7 @@ def shapley_index(env,state,memoizer_shapley = {}):
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
     corresponding_probabilities = match_probabilities[state_1]
     num_random_combos = 20*len(state_1)
-    num_random_combos = min(num_random_combos,100000)
+    # num_random_combos = min(num_random_combos,100000)
 
     combinations = np.zeros((num_random_combos, len(corresponding_probabilities)), dtype=int)
 
@@ -138,8 +138,12 @@ def shapley_index(env,state,memoizer_shapley = {}):
         else: 
             budget = 2
 
+    budget_probs = np.array([scipy.special.comb(len(corresponding_probabilities),k) for k in range(0,budget)])
+    budget_probs /= np.sum(budget_probs)
+
     for i in range(num_random_combos):
-        ones_indices = np.random.choice(len(corresponding_probabilities),budget-1, replace=False)
+        k = np.random.choice(len(budget_probs), p=budget_probs)
+        ones_indices = np.random.choice(len(corresponding_probabilities),k, replace=False)
         combinations[i, ones_indices] = 1
 
     scores = [np.prod(1-corresponding_probabilities[combo == 1]) for combo in combinations]
@@ -362,11 +366,21 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
     
     Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
 
+    debug = False 
+    
     Q_vals = per_epoch_results
 
     N = len(state)
 
     state_rep = binary_to_decimal(state)
+
+    if debug: 
+        for i in range(2**len(state)):
+            state = [int(j) for j in bin(i)[2:].zfill(N)]
+            max_action = np.argmax(Q_vals[i])
+            value = Q_vals[i][max_action]
+            action = [int(j) for j in bin(max_action)[2:].zfill(N)]
+            print("In state {} best action is {} {}".format(state,action,value))
 
     max_action = np.argmax(Q_vals[state_rep])
     binary_val = bin(max_action)[2:].zfill(N)
@@ -585,7 +599,7 @@ def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
 
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]*state
 
-    state_WI += match_probabilities
+    state_WI += (1-lamb)*match_probabilities
 
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
@@ -647,23 +661,21 @@ def shapley_whittle_policy(env,state,budget,lamb,memory, per_epoch_results):
     N = len(state) 
 
     if memory == None:
-        memoizer = Memoizer('optimal')
-        memoizer_shapley = {}
+        memory_whittle = Memoizer('optimal')
+        memory_shapley = np.array(shapley_index(env,np.ones(len(state)),{})[0])
     else:
-        memoizer, memoizer_shapley = memory 
+        memory_whittle, memory_shapley = memory 
         
-    state_WI = whittle_index(env,state,budget,lamb,memoizer,reward_function="activity")
+    state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="activity")
     state_WI*=lamb 
 
-    shapley_indices, memoizer_shapley = shapley_index(env,state,memoizer_shapley)
-
-    state_WI += shapley_indices
+    state_WI += memory_shapley*(1-lamb)
 
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
     action[sorted_WI[:budget]] = 1
 
-    return action, (memoizer, memoizer_shapley)
+    return action, (memory_whittle, memory_shapley)
 
 def random_policy(env,state,budget,lamb,memory, per_epoch_results):
     """Random policy that randomly notifies budget arms
@@ -756,8 +768,11 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
     if should_train:
         all_reward = np.zeros((n_epochs,test_T))
+        all_active_rate = np.zeros((n_epochs,test_T))
     else:
         all_reward = np.zeros((n_epochs, T))
+        all_active_rate = np.zeros((n_epochs,T))
+
 
     inference_time_taken = 0
 
@@ -778,10 +793,14 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
         memory = None 
         for t in range(0, T):
             state = env.observe()
+            if should_train:
+                if t>=T-test_T:
+                    all_active_rate[epoch,t-(T-test_T)] = np.sum(state)/len(state)
+            else:
+                all_active_rate[epoch,t] = np.sum(state)/len(state)
 
             action,memory = policy(env,state,budget,lamb,memory,per_epoch_results)
             next_state, reward, done, _ = env.step(action)
-
 
             if done and t+1 < T: env.reset()
 
@@ -799,10 +818,28 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
     print("Took {} time".format(inference_time_taken))
     env.time_taken = inference_time_taken
 
-    activity_rate = env.total_active/(all_reward.size*env.cohort_size*env.volunteers_per_arm)
-
     if get_memory:
-        return all_reward, activity_rate, memory
-    return all_reward, activity_rate
+        return all_reward, all_active_rate, memory
+    return all_reward, all_active_rate
 
 
+def get_discounted_reward(global_reward,active_rate,discount,lamb):
+    """Compute the discounted combination of global reward and active rate
+    
+    Arguments: 
+        global_reward: numpy array of size n_epochs x T
+        active_rate: numpy array of size n_epochs x T
+        discount: float, gamma
+
+    Returns: Float, average discounted reward across all epochs"""
+
+    all_rewards = []
+    combined_reward = global_reward*(1-lamb) + lamb*active_rate
+
+    for epoch in range(len(global_reward)):
+        reward = 0
+        for t in range(len(global_reward[epoch])):
+            reward += combined_reward[epoch,t]*discount**(t)
+        all_rewards.append(reward)
+    
+    return np.mean(all_rewards)
