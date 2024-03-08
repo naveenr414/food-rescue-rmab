@@ -7,6 +7,7 @@ from rmab.uc_whittle import Memoizer
 from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_iteration_neural, arm_compute_whittle_sufficient, arm_value_v_iteration, get_q_vals
 from rmab.utils import get_stationary_distribution, binary_to_decimal, list_to_binary
 from itertools import combinations
+from rmab.simulator import generate_random_context
 
 import torch
 import torch.nn as nn
@@ -21,7 +22,7 @@ import random
 import time
 import scipy
 
-def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shapley_values=None,contextual=False):
+def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shapley_values=None,contextual=False,match_probs=None):
     """Get the Whittle indices for each agent in a given state
     
     Arguments:
@@ -39,7 +40,7 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
         match_probability_list = np.array(shapley_values)
 
     if contextual:
-        match_probability_list = [(i.dot(i))**2 for i in match_probability_list]
+        match_probability_list = match_probs
 
     true_transitions = env.transitions 
     discount = env.discount 
@@ -156,6 +157,67 @@ def shapley_index(env,state,memoizer_shapley = {}):
 
     return shapley_indices, memoizer_shapley
 
+def shapley_index_contextual(env,state,memoizer_shapley = {}):
+    """Compute the Shapley index for matching; how much
+        does match probability increase when using some particular arm
+        
+    Arguments:
+        env: RMAB Simulator environment
+        state: Numpy array of 0-1 states for each volunteer
+        memoizer_shapley: Dictionary, to store previously computed Shapley indices
+        
+    Returns: Two things, shapley index, and updated dictionary"""
+    shapley_indices = [0 for i in range(len(state))]
+    state_str = "".join([str(i) for i in state])
+
+    if state_str in memoizer_shapley:
+        return memoizer_shapley[state_str], memoizer_shapley
+
+    state_1 = [i for i in range(len(state)) if state[i] != 0]
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    corresponding_probabilities = match_probabilities[state_1]
+    num_random_combos = 20*len(state_1)
+    # num_random_combos = min(num_random_combos,100000)
+
+    combinations = np.zeros((num_random_combos, len(corresponding_probabilities)), dtype=int)
+    random_contexts = np.array([generate_random_context(env.context_dim) for i in range(num_random_combos)])
+
+    budget = env.budget 
+
+    # Fix for when the number of combinations is small (with respect to the budget)
+    # In that scenario, we can essentially just manually compute
+    if len(corresponding_probabilities) <= env.budget-1:
+        if len(corresponding_probabilities) == 1:
+            return match_probabilities * state, memoizer_shapley
+        else: 
+            budget = 2
+
+    budget_probs = np.array([scipy.special.comb(len(corresponding_probabilities),k) for k in range(0,budget)])
+    budget_probs /= np.sum(budget_probs)
+
+    scores = []
+
+    for i in range(num_random_combos):
+        k = np.random.choice(len(budget_probs), p=budget_probs)
+        ones_indices = np.random.choice(len(corresponding_probabilities),k, replace=False)
+        combinations[i, ones_indices] = 1
+        score = np.prod([(1-env.match_function(random_contexts[i],match_probabilities[j])) for j in range(len(state)) if combinations[i,j]])
+        scores.append(score)
+    
+    scores = np.array(scores)
+
+    for i in range(len(state_1)):
+        avg_shapley = 0
+        for j in np.where(combinations[:, i] == 0)[0]:
+            match_prob = env.match_function(random_contexts[j],match_probabilities[i])
+            avg_shapley += scores[j] - (1-match_prob)*scores[j]
+        avg_shapley /= len(np.where(combinations[:, i] == 0)[0])
+        shapley_indices[i] = avg_shapley
+
+    memoizer_shapley[state_str] = shapley_indices
+
+    return shapley_indices, memoizer_shapley
+
 def whittle_activity_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Whittle index policy based on computing the subsidy for each arm
     This approximates the problem as the sum of Linear rewards, then 
@@ -234,17 +296,19 @@ def whittle_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
     N = len(state) 
 
     if memory == None:
-        memoizer = Memoizer('optimal')
+        memoizer = Memoizer('optimal') 
+        match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+        match_probs = [env.get_average_prob(match_probabilities[i],100) for i in range(N)]
     else:
-        memoizer = memory 
+        memoizer, match_probs = memory 
 
-    state_WI = whittle_index(env,state,budget,lamb,memoizer,contextual=True)
+    state_WI = whittle_index(env,state,budget,lamb,memoizer,contextual=True,match_probs=match_probs)
 
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
     action[sorted_WI[:budget]] = 1
 
-    return action, memoizer 
+    return action, (memoizer,match_probs) 
 
 
 def whittle_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
@@ -406,21 +470,20 @@ def greedy_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
 
     N = len(state)
 
-    score_by_agent = [0 for i in range(N)]
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    match_probabilities = [env.match_function(env.context,match_probabilities[i]) for i in range(N)]
 
-    for i in range(N):
-        activity_score = np.sum(state)
-        
+    score_by_agent = [0 for i in range(N)]
+
+    for i in range(N):        
         matching_score = state[i]*match_probabilities[i]
-        matching_score = (matching_score.dot(env.context))**2
-        score_by_agent[i] = matching_score + activity_score * lamb 
+        score_by_agent[i] = matching_score
 
     selected_idx = np.argsort(score_by_agent)[-budget:][::-1]
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
 
-    return action, None
+    return action, memory
 
 def greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Greedy policy that selects the budget highest values
@@ -632,10 +695,10 @@ def whittle_greedy_contextual_policy(env,state,budget,lamb,memory, per_epoch_res
     state_WI*=lamb 
 
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
-    match_probabilities = np.array([(i.dot(env.context))**2 for i in match_probabilities])
+    match_probabilities = np.array([env.match_function(env.context,i) for i in match_probabilities])
     match_probabilities *= state
 
-    state_WI += match_probabilities
+    state_WI += match_probabilities*(1-lamb)
 
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
@@ -676,6 +739,40 @@ def shapley_whittle_policy(env,state,budget,lamb,memory, per_epoch_results):
     action[sorted_WI[:budget]] = 1
 
     return action, (memory_whittle, memory_shapley)
+
+def shapley_whittle_contextual_policy(env,state,budget,lamb,memory, per_epoch_results):
+    """Combination of the Whittle index + Shapley values
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and the Whittle memoizer"""
+
+
+    N = len(state) 
+
+    if memory == None:
+        memory_whittle = Memoizer('optimal')
+        memory_shapley = np.array(shapley_index_contextual(env,np.ones(len(state)),{})[0])
+    else:
+        memory_whittle, memory_shapley = memory 
+        
+    state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="activity")
+    state_WI*=lamb 
+
+    state_WI += memory_shapley*(1-lamb)
+
+    sorted_WI = np.argsort(state_WI)[::-1]
+    action = np.zeros(N, dtype=np.int8)
+    action[sorted_WI[:budget]] = 1
+
+    return action, (memory_whittle, memory_shapley)
+
 
 def random_policy(env,state,budget,lamb,memory, per_epoch_results):
     """Random policy that randomly notifies budget arms
@@ -719,8 +816,8 @@ def contextual_future_policy(env,state,budget,lamb,memory, per_epoch_results):
 
     for i in range(len(match_probabilities)):
         for j in range(i+1,len(match_probabilities)):
-            prob_i = match_probabilities[i].dot(env.context)**2*state[i] 
-            prob_j = match_probabilities[j].dot(env.context)**2*state[j]
+            prob_i = env.match_function(env.context,match_probabilities[i])*state[i] 
+            prob_j = env.match_function(env.context,match_probabilities[j])*state[j]
             current_value = 1-(1-prob_i)*(1-prob_j)
             future_value = -1*np.abs(match_probabilities[i].dot(match_probabilities[j]))
             values_by_combo.append((current_value+future_value,i,j))
@@ -732,8 +829,6 @@ def contextual_future_policy(env,state,budget,lamb,memory, per_epoch_results):
     action[j] = 1
 
     return action, None
-
-
 
 def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_epoch_function=None,lamb=0,get_memory=False,should_train=False,test_T=0):
     """Wrapper to run policies without needing to go through boilerplate code
@@ -821,7 +916,6 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
     if get_memory:
         return all_reward, all_active_rate, memory
     return all_reward, all_active_rate
-
 
 def get_discounted_reward(global_reward,active_rate,discount,lamb):
     """Compute the discounted combination of global reward and active rate

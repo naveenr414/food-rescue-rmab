@@ -33,7 +33,7 @@ class RMABSimulator(gym.Env):
     '''
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
-            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],TIME_PER_RUN=10.0,contextual=False,context_dim=2):
+            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],TIME_PER_RUN=10.0,match_function=None,context_dim=2):
         '''
         Initialization
         '''
@@ -52,7 +52,8 @@ class RMABSimulator(gym.Env):
         self.reward_style = reward_style # Should we get reward style based on states or matches
         self.match_probability_list = match_probability_list
         self.TIME_PER_RUN = TIME_PER_RUN
-        self.contextual = contextual
+        self.match_function = match_function
+        self.contextual = self.match_function != None
         self.context_dim = context_dim
 
         if self.match_probability_list == []:
@@ -83,6 +84,20 @@ class RMABSimulator(gym.Env):
         self.total_active = 0
 
         return self.reset_instance()
+
+    def get_average_prob(self,volunteer_context,trials):
+        """Get the average match probability across trials
+        
+        Arguments:
+            volunteer_context: Some feature vector, representing volutneers
+            Trials: Number of trials to average over
+            
+        Returns: Average probability, [0,1] float"""
+
+        tot = 0
+        for t in range(trials):
+            t += self.match_function(generate_random_context(self.context_dim),volunteer_context)
+        return tot/trials
 
     def reset_instance(self):
         """ reset to a new environment instance """
@@ -192,7 +207,7 @@ class RMABSimulator(gym.Env):
             else:
                 self.total_active += np.sum(self.states)
                 if self.contextual:
-                    prod_state = [(1-(self.match_probability_list[self.agent_idx[i]].dot(self.context)*action[i]*self.states[i])**2) for i in range(len(self.agent_idx))]
+                    prod_state = [1-self.match_function(self.context,self.match_probability_list[self.agent_idx[i]])*action[i]*self.states[i] for i in range(len(self.agent_idx))]
                 else:
                     prod_state = 1-self.states*action*np.array(self.match_probability_list)[self.agent_idx]
                 prob_all_inactive = np.prod(prod_state)
