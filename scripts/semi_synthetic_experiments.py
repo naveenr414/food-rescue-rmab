@@ -38,8 +38,8 @@ is_jupyter = 'ipykernel' in sys.modules
 if is_jupyter: 
     seed        = 42
     n_arms      = 2
-    volunteers_per_arm = 5
-    budget      = 10
+    volunteers_per_arm = 2
+    budget      = 3
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 30 
@@ -47,7 +47,7 @@ if is_jupyter:
     n_epochs    = 10
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
-    lamb = 1/(n_arms*volunteers_per_arm)
+    lamb = 0.5
     prob_distro = 'normal'
 else:
     parser = argparse.ArgumentParser()
@@ -76,7 +76,7 @@ else:
     n_episodes  = args.n_episodes
     episode_len = args.episode_len
     n_epochs    = args.n_epochs
-    lamb = args.lamb /(volunteers_per_arm*n_arms)
+    lamb = args.lamb 
     save_with_date = args.use_date
     TIME_PER_RUN = args.time_per_run
     prob_distro = args.prob_distro
@@ -132,69 +132,97 @@ results['parameters'] = {'seed'      : seed,
 # +
 policy = greedy_policy
 name = "greedy"
-greedy_reward, greedy_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+greedy_match, greedy_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
 time_greedy = simulator.time_taken
-print(np.mean(greedy_reward) + lamb*n_arms*volunteers_per_arm*greedy_active_rate)
+greedy_discounted_reward = get_discounted_reward(greedy_match,greedy_active_rate,discount,lamb)
 
-results['{}_match'.format(name)] = np.mean(greedy_reward) 
-results['{}_active'.format(name)] = greedy_active_rate 
+print(greedy_discounted_reward)
+
+results['{}_reward'.format(name)] = greedy_discounted_reward
+results['{}_match'.format(name)] = np.mean(greedy_match) 
+results['{}_active'.format(name)] = np.mean(greedy_active_rate)
 results['{}_time'.format(name)] = time_greedy 
 
 # +
 policy = random_policy
 name = "random"
-random_reward, random_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+random_match, random_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
 time_random = simulator.time_taken
-print(np.mean(random_reward) + random_active_rate*lamb*n_arms*volunteers_per_arm)
+random_discounted_reward = get_discounted_reward(random_match,random_active_rate,discount,lamb)
 
-results['{}_match'.format(name)] = np.mean(random_reward)
-results['{}_active'.format(name)] = random_active_rate 
+print(random_discounted_reward)
+
+results['{}_reward'.format(name)] = random_discounted_reward
+results['{}_match'.format(name)] = np.mean(random_match) 
+results['{}_active'.format(name)] = np.mean(random_active_rate)
 results['{}_time'.format(name)] = time_random 
 
 # +
 policy = whittle_activity_policy
 name = "whittle_engagement"
-whittle_activity_reward, whittle_activity_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-time_whittle_activity = simulator.time_taken    
-print(np.mean(whittle_activity_reward) + whittle_activity_active_rate*lamb*n_arms*volunteers_per_arm)
+whittle_activity_match, whittle_activity_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+time_whittle_activity = simulator.time_taken
+whittle_activity_discounted_reward = get_discounted_reward(whittle_activity_match,whittle_activity_active_rate,discount,lamb)
 
-results['{}_match'.format(name)] = np.mean(whittle_activity_reward) 
-results['{}_active'.format(name)] = whittle_activity_active_rate 
+print(whittle_activity_discounted_reward)
+
+results['{}_reward'.format(name)] = whittle_activity_discounted_reward
+results['{}_match'.format(name)] = np.mean(whittle_activity_match) 
+results['{}_active'.format(name)] = np.mean(whittle_activity_active_rate)
 results['{}_time'.format(name)] = time_whittle_activity 
 
 # +
 policy = whittle_policy
 name = "linear_whittle"
-whittle_reward, whittle_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-time_whittle = simulator.time_taken    
-print(np.mean(whittle_reward) + whittle_active_rate*lamb*n_arms*volunteers_per_arm)
+whittle_match, whittle_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+time_whittle = simulator.time_taken
+whittle_discounted_reward = get_discounted_reward(whittle_match,whittle_active_rate,discount,lamb)
 
-results['{}_match'.format(name)] = np.mean(whittle_reward) 
-results['{}_active'.format(name)] = whittle_active_rate 
+print(whittle_discounted_reward)
+
+results['{}_reward'.format(name)] = whittle_discounted_reward
+results['{}_match'.format(name)] = np.mean(whittle_match) 
+results['{}_active'.format(name)] = np.mean(whittle_active_rate)
 results['{}_time'.format(name)] = time_whittle 
 
 # +
 policy = shapley_whittle_policy 
 name = "shapley_whittle"
-whittle_shapley_reward, whittle_shapley_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+whittle_shapley_match, whittle_shapley_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
 time_whittle_shapley = simulator.time_taken
-print(np.mean(whittle_shapley_reward) + whittle_shapley_active_rate*lamb*n_arms*volunteers_per_arm)
+whittle_shapley_discounted_reward = get_discounted_reward(whittle_shapley_match,whittle_shapley_active_rate,discount,lamb)
 
-results['{}_match'.format(name)] = np.mean(whittle_shapley_reward) 
-results['{}_active'.format(name)] = whittle_shapley_active_rate 
+print(whittle_shapley_discounted_reward)
+
+results['{}_reward'.format(name)] = whittle_shapley_discounted_reward
+results['{}_match'.format(name)] = np.mean(whittle_shapley_match) 
+results['{}_active'.format(name)] = np.mean(whittle_shapley_active_rate)
 results['{}_time'.format(name)] = time_whittle_shapley 
 
 # +
 policy = whittle_greedy_policy
 name = "whittle_greedy"
-whittle_greedy_reward, whittle_greedy_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
-time_whitte_greedy = simulator.time_taken
-print(np.mean(whittle_greedy_reward) + whittle_greedy_active_rate*lamb*n_arms*volunteers_per_arm)
+whittle_greedy_match, whittle_greedy_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb)
+time_whittle_greedy = simulator.time_taken
+whittle_greedy_discounted_reward = get_discounted_reward(whittle_greedy_match,whittle_greedy_active_rate,discount,lamb)
 
-results['{}_match'.format(name)] = np.mean(whittle_greedy_reward)
-results['{}_active'.format(name)] = whittle_greedy_active_rate 
-results['{}_time'.format(name)] = time_whitte_greedy 
+print(whittle_greedy_discounted_reward)
+
+results['{}_reward'.format(name)] = whittle_greedy_discounted_reward
+results['{}_match'.format(name)] = np.mean(whittle_greedy_match) 
+results['{}_active'.format(name)] = np.mean(whittle_greedy_active_rate)
+results['{}_time'.format(name)] = time_whittle_greedy 
 # -
+
+if is_jupyter:
+    policy = q_iteration_policy
+    per_epoch_function = q_iteration_epoch
+    name = "optimal"
+    optimal_match, optimal_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,per_epoch_function=per_epoch_function)
+    time_optimal = simulator.time_taken
+    optimal_discounted_reward = get_discounted_reward(optimal_match,optimal_active_rate,discount,lamb)
+
+    print(optimal_discounted_reward)
 
 # ## Write Data
 

@@ -44,7 +44,7 @@ is_jupyter = 'ipykernel' in sys.modules
 if is_jupyter: 
     seed        = 42
     n_arms      = 2
-    volunteers_per_arm = 5
+    volunteers_per_arm = 2
     budget      = 3
     discount    = 0.9
     alpha       = 3 
@@ -53,7 +53,7 @@ if is_jupyter:
     n_epochs    = 1 
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
-    lamb = 1/(n_arms*volunteers_per_arm)
+    lamb = 0.5
     prob_distro = 'normal'
 else:
     parser = argparse.ArgumentParser()
@@ -82,7 +82,7 @@ else:
     n_episodes  = args.n_episodes
     episode_len = args.episode_len
     n_epochs    = args.n_epochs
-    lamb = args.lamb /(volunteers_per_arm*n_arms)
+    lamb = args.lamb
     save_with_date = args.use_date
     TIME_PER_RUN = args.time_per_run
     prob_distro = args.prob_distro
@@ -138,38 +138,56 @@ results['parameters'] = {'seed'      : seed,
 # +
 policy = whittle_policy
 name = "linear_whittle"
-whittle_reward, whittle_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=1000)
-time_whittle = simulator.time_taken    
-print(np.mean(whittle_reward) + whittle_active_rate*lamb*n_arms*volunteers_per_arm)
+whittle_match, whittle_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=1000)
+time_whittle = simulator.time_taken
+whittle_discounted_reward = get_discounted_reward(whittle_match,whittle_active_rate,discount,lamb)
 
-results['{}_match'.format(name)] = np.mean(whittle_reward) 
-results['{}_active'.format(name)] = whittle_active_rate 
+print(whittle_discounted_reward)
+
+results['{}_reward'.format(name)] = whittle_discounted_reward
+results['{}_match'.format(name)] = np.mean(whittle_match) 
+results['{}_active'.format(name)] = np.mean(whittle_active_rate)
 results['{}_time'.format(name)] = time_whittle 
 
 # +
+simulator.mcts_test_iterations = 40
+simulator.mcts_train_iterations = 40
+
 policy = full_mcts_policy 
 name = "mcts"
-mcts_reward, mcts_active_rate,memory = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,get_memory=True,should_train=True,test_T=1000)
-mcts_time = simulator.time_taken
-print(np.mean(mcts_reward) + mcts_active_rate*lamb*n_arms*volunteers_per_arm)
+mcts_match, mcts_active_rate,memory = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,get_memory=True,should_train=True,test_T=1000)
+time_mcts = simulator.time_taken
+mcts_discounted_reward = get_discounted_reward(mcts_match,mcts_active_rate,discount,lamb)
 
-results['{}_match'.format(name)] = np.mean(mcts_reward) 
-results['{}_active'.format(name)] = mcts_active_rate 
-results['{}_time'.format(name)] = mcts_time 
+print(mcts_discounted_reward)
 
-
+results['{}_reward'.format(name)] = mcts_discounted_reward
+results['{}_match'.format(name)] = np.mean(mcts_match) 
+results['{}_active'.format(name)] = np.mean(mcts_active_rate)
+results['{}_time'.format(name)] = time_mcts 
 # -
 
-def plot_sliding_window(data):
-    return [np.mean(data[i:i+100]) for i in range(len(data)-100)]
+if is_jupyter:
+    policy = q_iteration_policy
+    per_epoch_function = q_iteration_epoch
+    name = "optimal"
+    optimal_match, optimal_active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,per_epoch_function=per_epoch_function)
+    time_optimal = simulator.time_taken
+    optimal_discounted_reward = get_discounted_reward(optimal_match,optimal_active_rate,discount,lamb)
 
+    print(optimal_discounted_reward)
 
-policy_loss_1 = memory[-5]
-value_loss_1 = memory[-9]
+if is_jupyter:
+    def plot_sliding_window(data):
+        return [np.mean(data[i:i+100]) for i in range(len(data)-100)]
+    policy_loss_1 = memory[-5]
+    value_loss_1 = memory[-9]
 
-plt.plot(plot_sliding_window(value_loss_1))
+if is_jupyter:  
+    plt.plot(plot_sliding_window(value_loss_1))
 
-plt.plot(plot_sliding_window(policy_loss_1))
+if is_jupyter:
+    plt.plot(plot_sliding_window(policy_loss_1))
 
 # ## Write Data
 
@@ -178,5 +196,3 @@ save_path = get_save_path('semi_synthetic_mcts',save_name,seed,use_date=save_wit
 delete_duplicate_results('semi_synthetic_mcts',"",results)
 
 json.dump(results,open('../results/'+save_path,'w'))
-
-

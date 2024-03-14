@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from scipy.stats import binom
+import random 
 
 
 import heapq  # priority queue
@@ -29,7 +30,7 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
     assert discount < 1
 
     n_states, n_actions = transitions.shape
-    value_func = np.random.rand(n_states)
+    value_func = np.array([random.random() for i in range(n_states)])
     difference = np.ones((n_states))
     iters = 0
 
@@ -118,7 +119,7 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
     N = len(match_probability_list)
     num_real_states = 2**(N)
 
-    value_func = np.random.rand(num_real_states)
+    value_func = np.array([random.random() for i in range(num_real_states)])
     difference = np.ones((num_real_states))
     iters = 0
     match_probability_list = np.array(match_probability_list)
@@ -200,7 +201,10 @@ def arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy,
     n_states, n_actions = transitions.shape
     p = match_prob
 
-    value_func = np.random.rand(n_arms+1,n_states)
+    value_func = np.zeros(n_arms+1,n_states)
+    for i in range(value_func.shape[0]):
+        for j in range(value_func.shape[1]):
+            value_func[i,j] = random.random()
     difference = np.ones((n_states))
     iters = 0
 
@@ -246,7 +250,7 @@ def arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy,
         # calculate Q-function
         Q_func = np.zeros((n_arms+1,n_states, n_actions))
 
-        weights = np.random.rand(n_arms+1)
+        weights = np.array([random.random() for i in range(n_arms+1)])
         weights /= weights.sum()
 
 
@@ -369,10 +373,10 @@ def arm_value_iteration_neural(all_transitions, discount, budget, match_prob, th
         for trial in range(trials):
             state = state.to(device)
             # Choose an action using epsilon-greedy policy
-            if np.random.rand() < 0.05:
+            if random.random() < 0.05:
                 action = [1 for i in range(budget)] + [0 for i in range(n_arms-budget)]
                 binary_action = binary_to_decimal(action)
-                np.random.shuffle(action)
+                random.shuffle(action)
                 action = torch.Tensor(action).to(device)
             else:
                 q_values = q_network(state)
@@ -388,7 +392,7 @@ def arm_value_iteration_neural(all_transitions, discount, budget, match_prob, th
             for i in range(n_arms):
                 current_state = state[i] 
                 one_probability = all_transitions[i][int(current_state.item())][int(action[i].item())][1]
-                next_state.append(int(np.random.random()<one_probability))
+                next_state.append(int(random.random()<one_probability))
 
             next_state = torch.Tensor(np.array(next_state))
             reward = r(state,action)

@@ -1,6 +1,5 @@
 import gym
 import numpy as np
-import random 
 import gymnasium.spaces as spaces
 
 
@@ -55,6 +54,8 @@ class RMABSimulator(gym.Env):
         self.match_function = match_function
         self.contextual = self.match_function != None
         self.context_dim = context_dim
+        self.test_epochs = 0
+        self.train_epochs = 0
 
         if self.match_probability_list == []:
             self.match_probability_list = [match_probability for i in range(self.cohort_size * self.volunteers_per_arm)]
@@ -96,7 +97,7 @@ class RMABSimulator(gym.Env):
 
         tot = 0
         for t in range(trials):
-            t += self.match_function(generate_random_context(self.context_dim),volunteer_context)
+            tot += self.match_function(generate_random_context(self.context_dim),volunteer_context)
         return tot/trials
 
     def reset_instance(self):

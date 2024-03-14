@@ -143,8 +143,8 @@ def shapley_index(env,state,memoizer_shapley = {}):
     budget_probs /= np.sum(budget_probs)
 
     for i in range(num_random_combos):
-        k = np.random.choice(len(budget_probs), p=budget_probs)
-        ones_indices = np.random.choice(len(corresponding_probabilities),k, replace=False)
+        k = random.choice(len(budget_probs), p=budget_probs)
+        ones_indices = random.choice(len(corresponding_probabilities),k, replace=False)
         combinations[i, ones_indices] = 1
 
     scores = [np.prod(1-corresponding_probabilities[combo == 1]) for combo in combinations]
@@ -198,8 +198,8 @@ def shapley_index_contextual(env,state,memoizer_shapley = {}):
     scores = []
 
     for i in range(num_random_combos):
-        k = np.random.choice(len(budget_probs), p=budget_probs)
-        ones_indices = np.random.choice(len(corresponding_probabilities),k, replace=False)
+        k = random.choice(len(budget_probs), p=budget_probs)
+        ones_indices = random.choice(len(corresponding_probabilities),k, replace=False)
         combinations[i, ones_indices] = 1
         score = np.prod([(1-env.match_function(random_contexts[i],match_probabilities[j])) for j in range(len(state)) if combinations[i,j]])
         scores.append(score)
@@ -299,6 +299,7 @@ def whittle_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
         memoizer = Memoizer('optimal') 
         match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
         match_probs = [env.get_average_prob(match_probabilities[i],100) for i in range(N)]
+        #match_probs = [env.match_function(env.context,match_probabilities[i])*state[i] for i in range(N)]
     else:
         memoizer, match_probs = memory 
 
@@ -309,6 +310,43 @@ def whittle_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
     action[sorted_WI[:budget]] = 1
 
     return action, (memoizer,match_probs) 
+
+def whittle_policy_adjusted_contextual(env,state,budget,lamb,memory,per_epoch_results):
+    """Whittle index policy based on computing the subsidy for each arm
+    This approximates the problem as the sum of Linear rewards, then 
+    Decomposes the problem into the problem for each arm individually
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Information on previously computed Whittle indices, the memoizer
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+
+    N = len(state) 
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    
+    if memory == None:
+        memoizer = Memoizer('optimal') 
+        match_probs = [env.get_average_prob(match_probabilities[i],100) for i in range(N)]
+    else:
+        memoizer, match_probs = memory 
+
+    state_WI = whittle_index(env,state,budget,lamb,memoizer,contextual=True,match_probs=match_probs)
+
+    for i in range(len(state_WI)):
+        if state[i] == 1:
+            state_WI[i] += (env.match_function(env.context,match_probabilities[i]) - match_probs[i])*(1-lamb)
+
+    sorted_WI = np.argsort(state_WI)[::-1]
+    action = np.zeros(N, dtype=np.int8)
+    action[sorted_WI[:budget]] = 1
+
+    return action, (memoizer,match_probs) 
+
 
 
 def whittle_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
@@ -430,10 +468,10 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
     
     Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
 
-    debug = False 
+    debug = False  
     
     Q_vals = per_epoch_results
-
+    
     N = len(state)
 
     state_rep = binary_to_decimal(state)
@@ -444,7 +482,8 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
             max_action = np.argmax(Q_vals[i])
             value = Q_vals[i][max_action]
             action = [int(j) for j in bin(max_action)[2:].zfill(N)]
-            print("In state {} best action is {} {}".format(state,action,value))
+            print("State {} value {}".format(state,value))
+        z = 1/0
 
     max_action = np.argmax(Q_vals[state_rep])
     binary_val = bin(max_action)[2:].zfill(N)
@@ -482,7 +521,6 @@ def greedy_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
     selected_idx = np.argsort(score_by_agent)[-budget:][::-1]
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
-
     return action, memory
 
 def greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
@@ -789,7 +827,7 @@ def random_policy(env,state,budget,lamb,memory, per_epoch_results):
 
 
     N = len(state)
-    selected_idx = np.random.choice(N, size=budget, replace=False)
+    selected_idx = random.choice(N, size=budget, replace=False)
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
 
@@ -819,7 +857,7 @@ def contextual_future_policy(env,state,budget,lamb,memory, per_epoch_results):
             prob_i = env.match_function(env.context,match_probabilities[i])*state[i] 
             prob_j = env.match_function(env.context,match_probabilities[j])*state[j]
             current_value = 1-(1-prob_i)*(1-prob_j)
-            future_value = -1*np.abs(match_probabilities[i].dot(match_probabilities[j]))
+            future_value = -1*np.abs(match_probabilities[i].dot(match_probabilities[j]))/(match_probabilities[i].dot(match_probabilities[i])*match_probabilities[j].dot(match_probabilities[j]))
             values_by_combo.append((current_value+future_value,i,j))
 
     values_by_combo = sorted(values_by_combo,key=lambda k: k[0])[::-1]
@@ -827,6 +865,12 @@ def contextual_future_policy(env,state,budget,lamb,memory, per_epoch_results):
     action = np.zeros(N, dtype=np.int8)
     action[i] = 1
     action[j] = 1
+
+    if budget > 2:
+        all_values = [k for k in range(len(action)) if k not in [i,j]]
+        random.shuffle(all_values)
+        for k in all_values[:budget-2]:
+            action[k] = 1
 
     return action, None
 
@@ -867,12 +911,15 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
     else:
         all_reward = np.zeros((n_epochs, T))
         all_active_rate = np.zeros((n_epochs,T))
+    env.train_epochs = T-test_T
+    env.test_epochs = test_T
 
 
     inference_time_taken = 0
 
     for epoch in range(n_epochs):
         if not should_train:
+            np.random.seed(seed)
             start = time.time()
 
         if epoch != 0: env.reset_instance()
@@ -901,6 +948,7 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
             if should_train:
                 if t == T-test_T:
+                    np.random.seed(seed)
                     start = time.time()
 
                 if t < (T-test_T):
@@ -936,4 +984,5 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
             reward += combined_reward[epoch,t]*discount**(t)
         all_rewards.append(reward)
     
+    # TODO: Change this back to all_rewards 
     return np.mean(all_rewards)
