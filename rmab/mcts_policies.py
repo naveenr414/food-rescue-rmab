@@ -610,56 +610,57 @@ def update_value_policy_network(past_states,past_values,past_actions,value_losse
     
     """
 
+    # TODO: Change this; currently only learning the value function at first
+
     random_point = max(len(past_states)-random.randint(1,200),0) # len(past_states)-1
     input_data = torch.Tensor(past_states[random_point])
 
-    if not(len(value_losses) > 300 and np.mean(value_losses[-300:]) < 1e-3):
-        if not contextual:
-            best_group_arms = []
-            num_groups = len(past_states[random_point])//env.volunteers_per_arm * 2 
-            all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
-            for g in range(num_groups//2):
-                matching_probs = all_match_probs[g*env.volunteers_per_arm:(g+1)*env.volunteers_per_arm]
-                sorted_matching_probs = np.argsort(matching_probs)[::-1] + g*env.volunteers_per_arm
-                sorted_matching_probs_0 = [i for i in sorted_matching_probs if past_states[random_point][i] == 0]
-                sorted_matching_probs_1 = [i for i in sorted_matching_probs if past_states[random_point][i] == 1]
-                best_group_arms.append(sorted_matching_probs_0)
-                best_group_arms.append(sorted_matching_probs_1)
+    if not contextual:
+        best_group_arms = []
+        num_groups = len(past_states[random_point])//env.volunteers_per_arm * 2 
+        all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
+        for g in range(num_groups//2):
+            matching_probs = all_match_probs[g*env.volunteers_per_arm:(g+1)*env.volunteers_per_arm]
+            sorted_matching_probs = np.argsort(matching_probs)[::-1] + g*env.volunteers_per_arm
+            sorted_matching_probs_0 = [i for i in sorted_matching_probs if past_states[random_point][i] == 0]
+            sorted_matching_probs_1 = [i for i in sorted_matching_probs if past_states[random_point][i] == 1]
+            best_group_arms.append(sorted_matching_probs_0)
+            best_group_arms.append(sorted_matching_probs_1)
 
-            x_points = []
-            for i in range(len(past_states[random_point])):
-                transition_points = env.transitions[i//env.volunteers_per_arm][:,:,1].flatten() 
-                x_points.append(list(transition_points)+[all_match_probs[i]]+[past_states[random_point][i]]+list(past_states[random_point]))
-            policy_network_predictions = np.array(policy_network(torch.Tensor(x_points)).detach().numpy().T)[0]
-            
-            policy_by_group = []
-            for g in range(num_groups):
-                policy_by_group.append(policy_network_predictions[best_group_arms[g]])
+        x_points = []
+        for i in range(len(past_states[random_point])):
+            transition_points = env.transitions[i//env.volunteers_per_arm][:,:,1].flatten() 
+            x_points.append(list(transition_points)+[all_match_probs[i]]+[past_states[random_point][i]]+list(past_states[random_point]))
+        policy_network_predictions = np.array(policy_network(torch.Tensor(x_points)).detach().numpy().T)[0]
+        
+        policy_by_group = []
+        for g in range(num_groups):
+            policy_by_group.append(policy_network_predictions[best_group_arms[g]])
 
-            action = np.zeros(len(past_states[random_point]), dtype=np.int8)
-            action[np.argsort(policy_network_predictions)[::-1][:env.budget]] = 1
-            group_indices = [0 for i in range(num_groups)]
-            full_combo = []
-            for g in range(num_groups):
-                for i in best_group_arms[g]:
-                    if action[i] == 1:
-                        group_indices[g] += 1
-                        full_combo.append(g)
-            full_combo = sorted(full_combo)
+        action = np.zeros(len(past_states[random_point]), dtype=np.int8)
+        action[np.argsort(policy_network_predictions)[::-1][:env.budget]] = 1
+        group_indices = [0 for i in range(num_groups)]
+        full_combo = []
+        for g in range(num_groups):
+            for i in best_group_arms[g]:
+                if action[i] == 1:
+                    group_indices[g] += 1
+                    full_combo.append(g)
+        full_combo = sorted(full_combo)
 
-            total_value = get_total_value(env,all_match_probs,best_group_arms,np.array(past_states[random_point]),group_indices,value_network,lamb,num_future_samples=25)
-        else:
-            total_value = past_values[random_point].item()
+        total_value = get_total_value(env,all_match_probs,best_group_arms,np.array(past_states[random_point]),group_indices,value_network,lamb,num_future_samples=25)
+    else:
+        total_value = past_values[random_point].item()
 
-        target = torch.Tensor([total_value])
-        output = value_network(input_data)
+    target = torch.Tensor([total_value])
+    output = value_network(input_data)
 
-        loss_value = criterion_value(output,target)
+    loss_value = criterion_value(output,target)
 
-        optimizer_value.zero_grad()
-        loss_value.backward()
-        optimizer_value.step()
-        value_losses.append(loss_value.item())
+    optimizer_value.zero_grad()
+    loss_value.backward()
+    optimizer_value.step()
+    value_losses.append(loss_value.item())
 
     random_point = len(past_states)-1 # random.randint(max(0,len(past_states)-past_window),len(past_states)-1)
     input_data = torch.Tensor(past_states[random_point])
@@ -764,6 +765,44 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,timeLimit=-1
         else:
             policy_network = MLP(6+len(state),128,1,use_sigmoid=True)
             optimizer_policy = optim.Adam(policy_network.parameters(),lr=policy_lr)
+    
+    
+        if per_epoch_results is not None: 
+            print("Got per epoch results")
+            q_values = per_epoch_results
+
+            # TODO: Remove this; currently training only the value function
+            # for _ in range(40):
+            #     for i in range(2**len(state)):
+            #         state_rep = [int(j) for j in bin(i)[2:].zfill(len(state))]
+            #         value_for_state = np.max(q_values[i])
+            #         max_action = np.argmax(q_values[i])
+            #         max_action = [int(j) for j in bin(max_action)[2:].zfill(len(state))]
+                    
+            #         target = torch.Tensor([value_for_state])
+            #         output = value_network(torch.Tensor([state_rep]))
+            #         loss_value = criterion_value(output,target)
+            #         optimizer_value.zero_grad()
+            #         loss_value.backward()
+            #         optimizer_value.step()
+            #         all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
+                    
+            #         x_points = []
+            #         for i in range(len(state_rep)):
+            #             transition_points = env.transitions[i//env.volunteers_per_arm][:,:,1].flatten() 
+            #             if type(all_match_probs[0]) == type(np.array([1,2,3])):
+            #                 x_points.append(list(transition_points)+list(all_match_probs[i])+list(env.context)+[state_rep[i]]+list(state_rep))
+            #             else:
+            #                 x_points.append(list(transition_points)+list([all_match_probs[i]])+[state_rep[i]]+list(state_rep))
+            #         output = policy_network(torch.Tensor(x_points))
+            #         target = torch.Tensor(max_action)
+            #         loss_policy = criterion_policy(output,target.reshape(len(target),1))
+
+            #         optimizer_policy.zero_grad()  
+            #         loss_policy.backward()  
+            #         optimizer_policy.step() 
+            #         policy_losses.append(loss_policy.item())
+    
     else:
         past_states = memory[0]
         past_states, past_values, past_actions, \
