@@ -670,3 +670,702 @@ def WIQL(env, n_episodes, n_epochs):
 
 def mcts_greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
     return run_mcts(env,state,budget,lamb,memory,per_epoch_results,mcts,VolunteerStateTwoStep,two_step_idx_to_action)
+
+def arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy, discount, n_arms,match_prob,budget,threshold=value_iteration_threshold,reward_function='activity',lamb=0,probs=[]):
+    """ value iteration for a single arm at a time
+
+    value iteration for the MDP defined by transitions with lambda-adjusted reward function
+    return action corresponding to pi^*(s_I)
+    """
+    assert discount < 1
+
+    n_states, n_actions = transitions.shape
+    p = match_prob
+
+    value_func = np.zeros(n_arms+1,n_states)
+    for i in range(value_func.shape[0]):
+        for j in range(value_func.shape[1]):
+            value_func[i,j] = random.random()
+    difference = np.ones((n_states))
+    iters = 0
+
+    # lambda-adjusted reward function
+    def reward(T,s, a):
+        return s - a * predicted_subsidy
+
+    def reward_matching(T,s,a):
+        return s*a - a*predicted_subsidy 
+
+    def combined_reward(T,s,a):
+        if T>0 and a == s == 1:
+            orig_T = T
+            T = min(T,budget)
+            return (1-np.power(1-p,T))/orig_T*(1-lamb) + lamb*s - a*predicted_subsidy 
+            # return (1-np.power(1-p,T) - (1-np.power(1-p,T-1))) + lamb*s - a*predicted_subsidy
+        elif T == 0 and a==s==1:
+            return 0
+        else:
+            return s*a*(1-lamb) + lamb*s - a*predicted_subsidy 
+
+    # binom_pmfs = [1,1,1,1,1,1,1]
+    # binom_pmfs = np.array(binom_pmfs)/np.sum(binom_pmfs)
+    # binom_pmfs = np.array([binom.pmf(i,n_arms,0.5) for i in range(n_arms+1)])
+    # binom_pmfs /= np.sum(binom_pmfs)
+
+    # for i in range(len(a_0)):
+    #     for j in range(len(a_1)):
+    #         binom_pmfs[i+j] += a_0[i]*a_1[j]
+    
+    # binom_pmfs = np.array(binom_pmfs)/np.sum(binom_pmfs)
+    
+    if probs != []:
+        binom_pmfs = probs 
+    else:
+        binom_pmfs = [1/(n_arms+1) for i in range(n_arms+1)]
+
+
+    while np.max(difference) >= threshold:
+        iters += 1
+        orig_value_func = np.copy(value_func)
+
+        # calculate Q-function
+        Q_func = np.zeros((n_arms+1,n_states, n_actions))
+
+        weights = np.array([random.random() for i in range(n_arms+1)])
+        weights /= weights.sum()
+
+
+        for T in range(n_arms+1):
+            for s in range(n_states):
+                for a in range(n_actions):
+                    if reward_function == 'activity':
+                        r = reward  
+                    elif reward_function == 'matching':
+                        r = reward_matching 
+                    elif reward_function == 'combined':
+                        r = combined_reward
+                    else:
+                        raise Exception("Reward function {} not found".format(reward_function))
+                        
+
+                    for s_prime in range(n_states):
+                        if s_prime == 0:
+                            p_s = 1-transitions[s,a]
+                        else:
+                            p_s = transitions[s,a]
+
+                        for T_prime in range(n_arms+1):
+                            # p_T = T**(T_prime)*np.exp(-T)/(np.math.factorial(T_prime)) # Poisson(T)  
+                            # if s_prime > T_prime:
+                            #     p_T = 0
+                            # else:                           
+                            #     p_T = (T-s)**(T_prime-s_prime)*np.exp(-(T-s))/(np.math.factorial(T_prime-s_prime)) # Poisson(T)                             
+                            # p_T = weights[T_prime]
+                            # p_T = 1/(n_arms+1)
+                            #p_T = 2**(T_prime)*np.exp(-2)/(np.math.factorial(T_prime))
+                            p_T = binom_pmfs[T][T_prime]                            
+                            Q_func[T,s, a] += p_s*p_T * (r(T,s, a) + discount * value_func[T_prime,s_prime])
+
+                value_func[T,s] = np.max(Q_func[T,s, :])
+
+        difference = np.abs(orig_value_func - value_func)
+
+    # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
+    return np.argmax(Q_func[T_stat,state, :])
+
+class QNetwork(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(QNetwork, self).__init__()
+        self.fc1 = nn.Linear(input_size, 24)
+        self.fc2 = nn.Linear(24, 24)
+        self.fc3 = nn.Linear(24, output_size)
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+def arm_value_iteration_neural(all_transitions, discount, budget, match_prob, threshold=value_iteration_threshold,reward_function='matching',lamb=0):
+    """ value iteration for a single arm at a time
+
+    value iteration for the MDP defined by transitions with lambda-adjusted reward function
+    return action corresponding to pi^*(s_I)
+
+    Arguments:
+        all_transitions: N x num_states x num_actions (presumably 2) x num_states
+        discount: Gamma, float
+        match_prob: Float, match probability for each arm
+
+    Returns: Q_func, numpy matrix with Q values for each combination of states, 
+        and each combination of actions
+        This is encoded as a 2^N x 2^N matrix, where a state is encoded in binary
+    """
+    assert discount < 1
+    n_arms, _ = all_transitions.shape[0], all_transitions.shape[2]
+    num_real_states = 2**(n_arms)
+    p = match_prob 
+    
+    def reward_activity(s,a):
+        return torch.pow(s)
+
+    def reward_matching(s,a):
+        return (1-torch.pow(1-p,s.dot(a)))
+        
+    def reward_combined(s,a):
+        if torch.sum(a) > budget:
+            return -10000
+
+        return (1-torch.pow(1-p,s.dot(a)))*(1-lamb) + lamb*torch.sum(s)/len(s)
+
+    if reward_function == 'activity':
+        r = reward_activity
+    elif reward_function == 'matching':
+        r = reward_matching 
+    elif reward_function == 'combined': 
+        r = reward_combined 
+    else:
+        raise Exception("{} reward function not found".format(reward_function))
+
+    input_size = n_arms
+    output_size = 2**n_arms
+    q_network = QNetwork(input_size, output_size)
+
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+
+
+    q_network = q_network.to(device)
+
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(q_network.parameters(), lr=0.001)
+
+    num_episodes = 500
+
+    for episode in range(num_episodes):
+        state = torch.randint(0, 2, (n_arms,), dtype=torch.float32) 
+        total_reward = 0
+        done = False
+
+        trials = 50 
+        for trial in range(trials):
+            state = state.to(device)
+            # Choose an action using epsilon-greedy policy
+            if random.random() < 0.05:
+                action = [1 for i in range(budget)] + [0 for i in range(n_arms-budget)]
+                binary_action = binary_to_decimal(action)
+                random.shuffle(action)
+                action = torch.Tensor(action).to(device)
+            else:
+                q_values = q_network(state)
+                binary_action = torch.argmax(q_values).item()
+                binary_val = bin(binary_action)[2:].zfill(n_arms)
+                action = np.zeros(n_arms, dtype=np.int8)
+                action = torch.Tensor(np.array([int(i) for i in binary_val])).to(device)
+
+
+            # Simulate the environment
+            next_state = []
+
+            for i in range(n_arms):
+                current_state = state[i] 
+                one_probability = all_transitions[i][int(current_state.item())][int(action[i].item())][1]
+                next_state.append(int(random.random()<one_probability))
+
+            next_state = torch.Tensor(np.array(next_state))
+            reward = r(state,action)
+
+            # Compute the target Q-value using the Q-learning formula
+            with torch.no_grad():
+                target_q_values = q_network(next_state.to(device))
+                target_q_value = reward + discount * torch.max(target_q_values)
+                target_q_value = target_q_value.to(device)
+
+            # Compute the loss and perform a gradient descent step
+            optimizer.zero_grad()
+            current_q_values = q_network(state)
+            loss = criterion(current_q_values[binary_action], target_q_value)
+            loss.backward()
+            optimizer.step()
+
+            state = next_state
+
+    return q_network 
+
+def arm_compute_whittle_sufficient(transitions, state, T_stat,discount, subsidy_break, n_arms,match_prob,budget,eps=whittle_threshold,reward_function='activity',lamb=0,probs=[]):
+    """
+    compute whittle index for a single arm using binary search
+
+    subsidy_break = the min value at which we stop iterating
+
+    param transitions:
+    param eps: epsilon convergence
+    returns Whittle index
+    """
+    lb, ub = get_init_bounds(transitions,lamb) # return lower and upper bounds on WI
+    top_WI = []
+    while abs(ub - lb) > eps:
+        predicted_subsidy = (lb + ub) / 2
+        # print('lamb', lamb_val, lb, ub)
+
+        # we've already filled our knapsack with higher-valued WIs
+        if ub < subsidy_break:
+            # print('breaking early!', subsidy_break, lb, ub)
+            return -10
+
+        action = arm_value_iteration_sufficient(transitions, state, T_stat,predicted_subsidy, discount,n_arms,match_prob,budget,reward_function=reward_function,lamb=lamb,probs=probs)
+        if action == 0:
+            # optimal action is passive: subsidy is too high
+            ub = predicted_subsidy
+        elif action == 1:
+            # optimal action is active: subsidy is too low
+            lb = predicted_subsidy
+        else:
+            raise Exception(f'action not binary: {action}')
+    subsidy = (ub + lb) / 2
+    return subsidy
+
+class VolunteerState():
+    def __init__(self):
+        self.non_match_prob = 1
+        self.previous_pulls = set()
+        self.N = 0
+        self.arm_values = []
+        self.budget = 0
+        self.states = []
+        self.discount = 0.9
+        self.lamb = 0
+        self.max_depth = 1
+        self.rollout_number = 1
+        self.previous_rewards = []
+        self.transitions = []
+        self.cohort_size = 0
+        self.volunteers_per_arm = 0
+        self.memory = {}
+        self.memoizer = Memoizer('optimal')
+
+    def getPossibleActions(self):
+        possibleActions = []
+        for i in range(self.N):
+            if i not in self.previous_pulls:
+                possibleActions.append(Action(arm=i))
+        return possibleActions
+
+    def takeAction(self, action):
+        newState = deepcopy(self)
+        newState.previous_pulls.add(action.arm)
+        newState.memoizer = self.memoizer
+
+        return newState
+
+    def isTerminal(self):
+        if len(self.previous_pulls) == self.budget:
+            return True 
+        return False         
+
+    def getReward(self):
+        """Compute the reward using the Whittle index + Matching
+            For each combo"""
+
+        policy = 'index'
+
+        if policy == 'reward':
+            non_match_prob = 1 
+            for i in self.previous_pulls:
+                expected_active_rate = 0
+                for i in range(len(self.states)):
+                    action = int(i in self.previous_pulls)
+                    expected_active_rate += self.transitions[i//self.volunteers_per_arm,self.states[i],action,1]
+
+                non_match_prob *= (1-self.states[i]*self.arm_values[i])
+
+            value = 1-non_match_prob  + self.lamb*expected_active_rate
+
+        elif policy == 'index':
+            state_WI = whittle_index(self.env,self.states,self.budget,self.lamb,self.memoizer,reward_function="activity")
+            non_match_prob = 1 
+
+            for i in self.previous_pulls:
+                non_match_prob *= (1-self.env.transitions[i//self.volunteers_per_arm,self.states[i],1,1]*self.arm_values[i])
+
+            value = (1-non_match_prob)/(1-self.discount) + self.lamb*np.sum(state_WI[list(self.previous_pulls)]) 
+
+        return value 
+
+    def set_state(self,states):
+        self.states = states
+
+class VolunteerStateTwoStepMCTS(VolunteerState):
+    def __init__(self):
+        super().__init__()
+
+        self.num_by_cohort = []
+        self.current_cohort = 0
+        self.num_in_cohort = 0
+
+    def set_num_by_cohort(self,num_by_cohort):
+        """Each level in the MCTS search is a different group  
+            that we aim to look at
+            The current cohort is the current group we're looking at"""
+
+        self.num_by_cohort = num_by_cohort
+        self.current_cohort = 0
+        while self.num_by_cohort[self.current_cohort] == 0:
+            self.current_cohort += 1
+
+    def getPossibleActions(self):
+        possibleActions = []
+        for i in range(self.volunteers_per_arm):
+            idx = self.current_cohort*self.volunteers_per_arm + i
+            if idx not in self.previous_pulls:
+                possibleActions.append(Action(arm=idx))
+        return possibleActions
+
+    def takeAction(self, action):
+        newState = deepcopy(self)
+        newState.previous_pulls.add(action.arm)
+        newState.memoizer = self.memoizer
+        newState.num_in_cohort += 1
+        if newState.num_in_cohort >= newState.num_by_cohort[newState.current_cohort]:
+            newState.num_in_cohort = 0
+            newState.current_cohort += 1
+            while newState.current_cohort < len(
+                newState.num_by_cohort) and newState.num_by_cohort[newState.current_cohort] == 0:
+                newState.current_cohort += 1
+
+        return newState
+
+
+class Action():
+    def __init__(self, arm):
+        self.arm = arm 
+
+    def __str__(self):
+        return str(self.arm)
+
+    def __repr__(self):
+        return str(self)
+
+    def __eq__(self, other):
+        return self.__class__ == other.__class__ and self.arm == other.arm
+
+    def __hash__(self):
+        return hash((self.arm))
+
+def set_initial_state(initialState,env,state,memory,lamb):
+    """Set the hyperparameter values for the initial state
+        based on environment + state information
+        
+    Arguments:
+        initialState: VolunterState or VolunterStateTwoStep
+        env: Simulator Environmenet
+        state: Numpy array of the current state
+        memory: List with the first element being a dictionary
+            The second being a memoizer
+        lamb: Float, the current \lambda value
+            
+    Returns: The initialState, with all the parameters set"""
+
+    initialState.arm_values = np.array(env.match_probability_list)[env.agent_idx] 
+    initialState.N = len(initialState.arm_values)
+    initialState.budget = env.budget 
+    initialState.transitions = env.transitions
+    initialState.cohort_size = env.cohort_size
+    initialState.volunteers_per_arm = env.volunteers_per_arm
+    initialState.discount = env.discount 
+    initialState.env = env 
+    initialState.lamb = lamb
+    initialState.set_state(state)
+    initialState.memory = memory[0]
+    initialState.memoizer = memory[1]
+
+    return initialState
+
+def one_step_idx_to_action(selected_idx,env,state,lamb,memory):
+    """Turn a list of volunteers to notify into a 0-1 
+        vector for action
+        
+    Arguments:
+        selected_idx: Numpy array of volunteers to notify
+        env: RMAB Simulator Environment
+        state: 0-1 numpy array for the state
+        lamb: Float, what \lambda value
+        memory: List with the first element as a dictionary
+            second element as a memoizer
+            
+    Returns: 0-1 numpy array with the actions to take"""
+
+    selected_idx = np.array(selected_idx)
+    action = np.zeros(len(state), dtype=np.int8)
+    action[selected_idx] = 1
+
+    return action, memory
+
+def two_step_mcts_to_action(env,state,lamb, memory): 
+    """Run MCTS to find the groups, then run MCTS again to find
+        which volunteers in each group to notify
+        
+    Arguments:
+        selected_idx: Numpy array of volunteers to notify
+        env: RMAB Simulator Environment
+        state: 0-1 numpy array for the state
+        lamb: Float, what \lambda value
+        memory: List with the first element as a dictionary
+            second element as a memoizer
+            
+    Returns: 0-1 numpy array with the actions to take"""
+
+
+    fractions = [1/3,1/2]
+    fractions.append((1-sum(fractions))/2)
+    greedy_action, _ = mcts_policy(env,state,env.budget,lamb,memory,None,timeLimit=env.TIME_PER_RUN * fractions[0])
+    bin_counts = np.zeros(env.cohort_size, dtype=int)
+    for i in range(env.cohort_size):
+        bin_counts[i] = np.sum(greedy_action[i*env.volunteers_per_arm:(i+1)*env.volunteers_per_arm])
+    num_by_cohort = bin_counts
+
+    initialState = VolunteerStateTwoStepMCTS()
+    initialState = set_initial_state(initialState,env,state,memory,lamb)
+    initialState.set_num_by_cohort(num_by_cohort)
+    
+    searcher = mcts(timeLimit=env.TIME_PER_RUN * fractions[1]) 
+    selected_idx = []
+    current_state = initialState
+
+    for _ in range(env.budget):
+        action = searcher.search(initialState=current_state)
+        current_state = current_state.takeAction(action)
+        selected_idx.append(action.arm)
+        searcher = mcts(timeLimit=env.TIME_PER_RUN * fractions[2])
+
+    action = np.zeros(len(state), dtype=np.int8)
+    action[selected_idx] = 1
+
+    return action, memory
+
+def two_step_mcts_to_whittle(env,state,lamb, memory): 
+    """Run Whittle+Greedy to find the groups, then run MCTS again to find
+        which volunteers in each group to notify
+        
+    Arguments:
+        selected_idx: Numpy array of volunteers to notify
+        env: RMAB Simulator Environment
+        state: 0-1 numpy array for the state
+        lamb: Float, what \lambda value
+        memory: List with the first element as a dictionary
+            second element as a memoizer
+            
+    Returns: 0-1 numpy array with the actions to take"""
+
+
+    fractions = [1/2]
+    fractions.append((1-sum(fractions))/2)
+    greedy_action, _ = whittle_greedy_policy(env,state,env.budget,lamb,memory[1],None)
+    bin_counts = np.zeros(env.cohort_size, dtype=int)
+    for i in range(env.cohort_size):
+        bin_counts[i] = np.sum(greedy_action[i*env.volunteers_per_arm:(i+1)*env.volunteers_per_arm])
+    num_by_cohort = bin_counts
+
+    initialState = VolunteerStateTwoStepMCTS()
+    initialState = set_initial_state(initialState,env,state,memory,lamb)
+
+    initialState.set_num_by_cohort(num_by_cohort)
+    
+    searcher = mcts(timeLimit=env.TIME_PER_RUN * fractions[0]) 
+    selected_idx = []
+    current_state = initialState 
+
+    for _ in range(env.budget):
+        action = searcher.search(initialState=current_state)
+        current_state = current_state.takeAction(action)
+        selected_idx.append(action.arm)
+        searcher = mcts(timeLimit=env.TIME_PER_RUN * fractions[1])
+
+    action = np.zeros(len(state), dtype=np.int8)
+    action[selected_idx] = 1
+
+    return action, memory
+
+def init_memory(memory):
+    """For MCTS process, we store two things in the memory
+        a) A dictionary with past iterations which we've solved
+        b) A memoizer for the Whittle process
+    
+    Arguments:
+        memory: None or a list with a dictionary and a memoizer
+    
+    Returns: A list with a dictionary and a memoizer"""
+
+    if memory == None:
+        memory = [{}, Memoizer('optimal')]
+    return memory 
+
+def run_two_step(env,state,budget,lamb,memory,per_epoch_results,idx_to_action,timeLimit=-1):
+    """Run a two-step policy using the idx_to_action function
+    
+    Arguments: 
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Information on previously computed Whittle indices, the memoizer
+        per_epoch_results: Any information computed per epoch; unused here
+        idx_to_action: Function such as two_step_mcts_to_whittle
+        timeLimit: Maximum time, in miliseconds, for all MCTS calls
+            By default this should be env.TIME_PER_RUN
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=
+        List with a dictionary and a memoizer"""
+    
+    memory = init_memory(memory)
+    if timeLimit == -1:
+        timeLimit = env.TIME_PER_RUN 
+
+    if ''.join([str(i) for i in state]) in memory[0]:
+        return memory[0][''.join([str(i) for i in state])], memory
+
+    action, memory = idx_to_action(env,state,lamb,memory)
+    memory[0][''.join([str(i) for i in state])] = action 
+    return action, memory
+
+def run_mcts(env,state,budget,lamb,memory,per_epoch_results,mcts_function,timeLimit=-1):
+    """Compute an MCTS-based policy which selects arms to notify 
+    sequentially, then rolls out for Q=5 steps to predict reward
+
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Information on previously computed Whittle indices, the memoizer
+        per_epoch_results: Any information computed per epoch; unused here
+        timeLimit: Total time for all MCTS calls 
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+
+    memory = init_memory(memory)
+
+    if ''.join([str(i) for i in state]) in memory[0]:
+        return memory[0][''.join([str(i) for i in state])], memory
+    
+    if timeLimit == -1:
+        timeLimit = env.TIME_PER_RUN 
+
+    initialState = VolunteerState()
+    initialState = set_initial_state(initialState,env,state,memory,lamb)
+
+    fraction_first_budget = 4/5
+    fraction_other = (1-fraction_first_budget)/(budget-1)
+
+    searcher = mcts_function(timeLimit=timeLimit*fraction_first_budget)
+    
+    selected_idx = []
+    current_state = initialState 
+
+    for _ in range(budget):
+        action = searcher.search(initialState=current_state)
+        current_state = current_state.takeAction(action)
+        selected_idx.append(action.arm)
+        searcher = mcts_function(timeLimit=timeLimit*fraction_other)
+
+    action, memory = one_step_idx_to_action(selected_idx,env,state,lamb,memory)
+    memory[0][''.join([str(i) for i in state])] = action 
+    return action, memory
+
+def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,num_iterations=100,timeLimit=-1):
+    return run_mcts(env,state,budget,lamb,memory,per_epoch_results,mcts,timeLimit=timeLimit)
+
+def mcts_mcts_policy(env,state,budget,lamb,memory,per_epoch_results):
+    return run_two_step(env,state,budget,lamb,memory,per_epoch_results,two_step_mcts_to_action)
+
+def mcts_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
+    return run_two_step(env,state,budget,lamb,memory,per_epoch_results,two_step_mcts_to_whittle)
+
+
+def whittle_iterative(env,state,budget,lamb,memory, per_epoch_results):
+    """Combination of the Whittle index + match probability
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and the Whittle memoizer"""
+
+
+    N = len(state) 
+
+    true_transitions = env.transitions
+
+    if memory == None:
+        memoizer = Memoizer('optimal')
+    else:
+        memoizer = memory 
+
+    # TODO: Make this more general than \lamb = 0
+    # Compute this for \lamb = 0 for now 
+
+    people_to_add = set()
+
+    if memory == None:
+        memoizer = [Memoizer('optimal'),Memoizer('optimal')]
+    else:
+        memoizer = memory 
+    
+    # state_WI_activity, state_V_activity = whittle_v_index(env,state,budget,lamb,memoizer[0],reward_function="activity")
+    state_WI_matching, state_V_matching, state_V_full_matching = whittle_v_index(env,state,budget,lamb,memoizer[1],reward_function="matching")
+
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+
+    true_transitions = env.transitions 
+    max_probabilities = true_transitions[:,1,1,1]
+    probable_future_value = 1
+
+    for _ in range(budget):
+        values = [0 for j in range(N)]
+        previous_val = 1-np.prod([1-match_probabilities[j]*state[j] for j in list(people_to_add)])
+
+        for i in range(N):
+            if i not in people_to_add:
+                current_val = match_probabilities[i]*state[i]
+                # future_val = state_V_matching[i] + state_WI_matching[i]*max_probabilities[i]*(1/(1-env.discount)-1)
+                # future_val -= current_val 
+                # future_val *= env.discount
+                #future_val = (state_WI_matching[i] - match_probabilities[i])/env.discount 
+                future_val = state_V_full_matching[i,0]*true_transitions[i//env.volunteers_per_arm,state[i],1,0] + state_V_full_matching[i][1]*true_transitions[i//env.volunteers_per_arm,state[i],1,1]
+                future_val -=  state_V_full_matching[i,0]*true_transitions[i//env.volunteers_per_arm,state[i],0,0] + state_V_full_matching[i][1]*true_transitions[i//env.volunteers_per_arm,state[i],0,1]
+                future_val *= env.discount 
+
+                future_match_prob = match_probabilities[i]*true_transitions[i//env.volunteers_per_arm,state[i],1,1]
+
+                real_current_val = 1-np.prod([1-match_probabilities[j]*state[j] for j in list(people_to_add)])*(1-match_probabilities[i])
+                ratio = (real_current_val - previous_val)/(match_probabilities[i]*state[i])
+                ratio_future = (1-probable_future_value*(1-future_match_prob) - (1-probable_future_value))/(future_match_prob)
+                if match_probabilities[i]*state[i] == 0:
+                    ratio = 0
+                if future_match_prob == 0:
+                    ratio_future = 0 
+                total_val = future_val*ratio_future + current_val*ratio  
+                #total_val = future_val*ratio_future + current_val*ratio 
+                values[i] = total_val 
+        
+        if np.max(values) > 0:
+            idx = np.argmax(values)
+            people_to_add.add(idx)
+            probable_future_value *= (1-match_probabilities[idx]*true_transitions[
+                idx//env.volunteers_per_arm,state[idx],1,1])
+        else:
+            break 
+
+    people_to_add = list(people_to_add)
+
+    action = np.zeros(N, dtype=np.int8)
+    action[people_to_add] = 1
+
+    return action, memoizer 

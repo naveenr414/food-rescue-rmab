@@ -6,6 +6,8 @@ import os
 import secrets
 from scipy.stats import norm, beta
 import scipy.stats as st
+import math
+
 
 def get_stationary_distribution(P):
     """Given a Markov Chain, P, get its stationary distribution
@@ -260,3 +262,45 @@ def list_to_binary(a,n_arms):
     Returns: 0-1 List of length n_arms"""
 
     return np.array([1 if i in a else 0 for i in range(n_arms)])
+
+def create_prob_distro(prob_distro,N):
+    """Create match probabilities for N volunteers according to some distro.
+    
+    Arguments:
+        prob_distro: String, 'uniform', 'uniform_small', 'uniform_large', 
+            or 'normal'
+        N: Number of total volunteers
+        
+    Returns: List of floats"""
+
+    if prob_distro == 'uniform':
+        match_probabilities = [np.random.random() for i in range(N)] 
+    elif prob_distro == 'uniform_small':
+        match_probabilities = [np.random.random()/4 for i in range(N)] 
+    elif prob_distro == 'uniform_large':
+        match_probabilities = [np.random.random()/4+0.75 for i in range(N)] 
+    elif prob_distro == 'normal':
+        match_probabilities = [np.clip(np.random.normal(0.25, 0.1),0,1) for i in range(N)] 
+    else:
+        raise Exception("{} probability distro not found".format(prob_distro))
+
+    return match_probabilities
+
+def haversine(lat1, lon1, lat2, lon2):
+    """Compute the distance, in miles, between two lat-lon coordinates
+
+    Arguments:
+        lat1: Float, 1st lattitude
+        lon1: Float, 1st longitude
+        lat2: Float, 2nd lattitude
+        lon2: Float, 2nd longitude
+    
+    Returns: Float, distnace in miles"""
+    
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    r = 3956
+    return r * c

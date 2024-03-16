@@ -4,8 +4,8 @@ import numpy as np
 import heapq
 
 from rmab.uc_whittle import Memoizer
-from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_iteration_neural, arm_compute_whittle_sufficient, arm_value_v_iteration, get_q_vals
-from rmab.utils import get_stationary_distribution, binary_to_decimal, list_to_binary
+from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_v_iteration
+from rmab.utils import binary_to_decimal
 from itertools import combinations
 from rmab.simulator import generate_random_context
 
@@ -143,8 +143,8 @@ def shapley_index(env,state,memoizer_shapley = {}):
     budget_probs /= np.sum(budget_probs)
 
     for i in range(num_random_combos):
-        k = random.choice(len(budget_probs), p=budget_probs)
-        ones_indices = random.choice(len(corresponding_probabilities),k, replace=False)
+        k = random.choices(list(range(len(budget_probs))), weights=budget_probs,k=1)[0]
+        ones_indices = random.sample(list(range(len(corresponding_probabilities))),k)
         combinations[i, ones_indices] = 1
 
     scores = [np.prod(1-corresponding_probabilities[combo == 1]) for combo in combinations]
@@ -198,8 +198,8 @@ def shapley_index_contextual(env,state,memoizer_shapley = {}):
     scores = []
 
     for i in range(num_random_combos):
-        k = random.choice(len(budget_probs), p=budget_probs)
-        ones_indices = random.choice(len(corresponding_probabilities),k, replace=False)
+        k = random.choices(list(range(len(budget_probs))), weights=budget_probs,k=1)[0]
+        ones_indices = random.sample(list(range(len(corresponding_probabilities))),k)
         combinations[i, ones_indices] = 1
         score = np.prod([(1-env.match_function(random_contexts[i],match_probabilities[j])) for j in range(len(state)) if combinations[i,j]])
         scores.append(score)
@@ -347,8 +347,6 @@ def whittle_policy_adjusted_contextual(env,state,budget,lamb,memory,per_epoch_re
 
     return action, (memoizer,match_probs) 
 
-
-
 def whittle_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Whittle index policy based on computing the subsidy for each arm
     This approximates the problem as the sum of Linear rewards, then 
@@ -382,7 +380,6 @@ def whittle_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     return action, memoizer 
  
-
 def q_iteration_epoch(env,lamb):
     """Compute Q Values for all combinations of agents in a given environment
     
@@ -587,93 +584,6 @@ def greedy_one_step_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     return action, None
 
-def whittle_iterative(env,state,budget,lamb,memory, per_epoch_results):
-    """Combination of the Whittle index + match probability
-    
-    Arguments:
-        env: Simulator environment
-        state: Numpy array with 0-1 states for each agent
-        budget: Integer, max agents to select
-        lamb: Lambda, float, tradeoff between matching vs. activity
-        memory: Any information passed from previous epochs; unused here
-        per_epoch_results: Any information computed per epoch; unused here
-    
-    Returns: Actions, numpy array of 0-1 for each agent, and the Whittle memoizer"""
-
-
-    N = len(state) 
-
-    true_transitions = env.transitions
-
-    if memory == None:
-        memoizer = Memoizer('optimal')
-    else:
-        memoizer = memory 
-
-    # TODO: Make this more general than \lamb = 0
-    # Compute this for \lamb = 0 for now 
-
-    people_to_add = set()
-
-    if memory == None:
-        memoizer = [Memoizer('optimal'),Memoizer('optimal')]
-    else:
-        memoizer = memory 
-    
-    # state_WI_activity, state_V_activity = whittle_v_index(env,state,budget,lamb,memoizer[0],reward_function="activity")
-    state_WI_matching, state_V_matching, state_V_full_matching = whittle_v_index(env,state,budget,lamb,memoizer[1],reward_function="matching")
-
-    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
-
-    true_transitions = env.transitions 
-    max_probabilities = true_transitions[:,1,1,1]
-    probable_future_value = 1
-
-    for _ in range(budget):
-        values = [0 for j in range(N)]
-        previous_val = 1-np.prod([1-match_probabilities[j]*state[j] for j in list(people_to_add)])
-
-        for i in range(N):
-            if i not in people_to_add:
-                current_val = match_probabilities[i]*state[i]
-                # future_val = state_V_matching[i] + state_WI_matching[i]*max_probabilities[i]*(1/(1-env.discount)-1)
-                # future_val -= current_val 
-                # future_val *= env.discount
-                #future_val = (state_WI_matching[i] - match_probabilities[i])/env.discount 
-                future_val = state_V_full_matching[i,0]*true_transitions[i//env.volunteers_per_arm,state[i],1,0] + state_V_full_matching[i][1]*true_transitions[i//env.volunteers_per_arm,state[i],1,1]
-                future_val -=  state_V_full_matching[i,0]*true_transitions[i//env.volunteers_per_arm,state[i],0,0] + state_V_full_matching[i][1]*true_transitions[i//env.volunteers_per_arm,state[i],0,1]
-                future_val *= env.discount 
-
-                future_match_prob = match_probabilities[i]*true_transitions[i//env.volunteers_per_arm,state[i],1,1]
-
-                real_current_val = 1-np.prod([1-match_probabilities[j]*state[j] for j in list(people_to_add)])*(1-match_probabilities[i])
-                ratio = (real_current_val - previous_val)/(match_probabilities[i]*state[i])
-                ratio_future = (1-probable_future_value*(1-future_match_prob) - (1-probable_future_value))/(future_match_prob)
-                if match_probabilities[i]*state[i] == 0:
-                    ratio = 0
-                if future_match_prob == 0:
-                    ratio_future = 0 
-                total_val = future_val*ratio_future + current_val*ratio  
-                #total_val = future_val*ratio_future + current_val*ratio 
-                values[i] = total_val 
-        
-        if np.max(values) > 0:
-            idx = np.argmax(values)
-            people_to_add.add(idx)
-            probable_future_value *= (1-match_probabilities[idx]*true_transitions[
-                idx//env.volunteers_per_arm,state[idx],1,1])
-        else:
-            break 
-
-    people_to_add = list(people_to_add)
-
-    action = np.zeros(N, dtype=np.int8)
-    action[people_to_add] = 1
-
-    return action, memoizer 
-
-
-
 def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
     """Combination of the Whittle index + match probability
     
@@ -827,7 +737,7 @@ def random_policy(env,state,budget,lamb,memory, per_epoch_results):
 
 
     N = len(state)
-    selected_idx = random.choice(N, size=budget, replace=False)
+    selected_idx = random.sample(list(range(N)), budget)
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
 
@@ -984,5 +894,4 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
             reward += combined_reward[epoch,t]*discount**(t)
         all_rewards.append(reward)
     
-    # TODO: Change this back to all_rewards 
     return np.mean(all_rewards)

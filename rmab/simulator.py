@@ -572,6 +572,7 @@ def synthetic_transition_small_window(all_population, n_states, n_actions, low, 
 
 
 
+
 '''
 Testing the functionality of the simulator
 '''

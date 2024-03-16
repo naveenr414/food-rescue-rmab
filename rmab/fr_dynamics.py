@@ -1,6 +1,7 @@
 import numpy as np
 from datetime import timedelta 
 from rmab.database import run_query, open_connection, close_connection 
+from rmab.utils import haversine
 import rmab.secret as secret 
 import random 
 import json
@@ -158,20 +159,6 @@ def get_match_probs(cohort_idx):
         cohort_idx: List of volunteers, based on the number of trips completed
         
     Returns: Match probabilities, list of floats between 0-1"""
-    
-    def haversine(lat1, lon1, lat2, lon2):
-        import math
-        """
-        Calculate the great circle distance between two points 
-        on the earth (specified in decimal degrees)
-        """
-        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-        dlon = lon2 - lon1
-        dlat = lat2 - lat1
-        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-        r = 3956
-        return r * c
 
     db_name = secret.database_name 
     username = secret.database_username 
@@ -306,27 +293,12 @@ def get_dict_match_probs():
         
     Returns: Match probabilities, list of floats between 0-1"""
     
-    def haversine(lat1, lon1, lat2, lon2):
-        import math
-        """
-        Calculate the great circle distance between two points 
-        on the earth (specified in decimal degrees)
-        """
-        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-        dlon = lon2 - lon1
-        dlat = lat2 - lat1
-        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-        r = 3956
-        return r * c
-
     db_name = secret.database_name 
     username = secret.database_username 
     password = secret.database_password 
     ip_address = secret.ip_address
     port = secret.database_port
     connection_dict = open_connection(db_name,username,password,ip_address,port)
-    connection = connection_dict['connection']
     cursor = connection_dict['cursor']
 
     query = "SELECT * FROM RESCUES"
@@ -334,7 +306,6 @@ def get_dict_match_probs():
 
     query = ("SELECT * FROM ADDRESSES")
     all_addresses = run_query(cursor,query)
-    len(all_addresses)
 
     address_id_to_latlon = {}
     address_id_to_state = {}
@@ -342,6 +313,7 @@ def get_dict_match_probs():
         address_id_to_state[i['id']] = i['state']
         address_id_to_latlon[i['id']] = (i['latitude'],i['longitude'])
 
+    # Get user information
     user_id_to_latlon = {}
     user_id_to_state = {}
     user_id_to_start = {}
@@ -349,7 +321,6 @@ def get_dict_match_probs():
 
     query = ("SELECT * FROM USERS")
     user_data = run_query(cursor,query)
-
     for user in user_data:
         if user['address_id'] != None: 
             user_id_to_latlon[user['id']] = address_id_to_latlon[user['address_id']]
@@ -357,14 +328,12 @@ def get_dict_match_probs():
             user_id_to_start[user['id']] = user['created_at']
             user_id_to_end[user['id']] = user['updated_at']
 
-
     query = (
         "SELECT * "
         "FROM RESCUES "
         "WHERE PUBLISHED_AT <= CURRENT_DATE "
         "AND USER_ID IS NOT NULL "
     )
-
     all_user_published = run_query(cursor,query)
 
     query = (
@@ -379,7 +348,6 @@ def get_dict_match_probs():
         "SELECT * FROM donations"
     )
     donation_data = run_query(cursor,query)
-
     donation_id_to_latlon = {}
     for i in donation_data:
         donation_id_to_latlon[i['id']] = donor_location_to_latlon[i['donor_location_id']]
@@ -390,9 +358,7 @@ def get_dict_match_probs():
         "WHERE PUBLISHED_AT <= CURRENT_DATE "
         "AND USER_ID IS NOT NULL "
     )
-
     all_user_published = run_query(cursor,query)
-
     data_by_user = {}
     for i in all_user_published:
         user_id = i['user_id']
@@ -403,12 +369,12 @@ def get_dict_match_probs():
 
         data_by_user[user_id].append(published_at)
 
+    # Get rescue location info
     num_rescues_to_user_id = {}
     for i in data_by_user:
         if len(data_by_user[i]) not in num_rescues_to_user_id:
             num_rescues_to_user_id[len(data_by_user[i])] = []
         num_rescues_to_user_id[len(data_by_user[i])].append(i)
-
     rescue_to_latlon = {}
     rescue_to_time = {}
     for i in all_rescue_data:
@@ -418,6 +384,14 @@ def get_dict_match_probs():
             rescue_to_time[i['id']] = i['published_at']
 
     def num_notifications(user_id):
+        """Compute the number of times a user was notified
+            Use the fact that all users within a 5 mile radius 
+            are notified 
+            
+        Arguments: 
+            user_id: Integer, the ID for the user
+            
+        Returns: Integer, number of notifications"""
         if user_id not in user_id_to_latlon:
             return 0
         user_location = user_id_to_latlon[user_id]
