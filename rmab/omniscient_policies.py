@@ -174,34 +174,30 @@ def shapley_index_contextual(env,state,memoizer_shapley = {}):
         return memoizer_shapley[state_str], memoizer_shapley
 
     state_1 = [i for i in range(len(state)) if state[i] != 0]
-    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
-    corresponding_probabilities = match_probabilities[state_1]
+    match_probabilities = np.array(env.current_episode_match_probs)[:,env.agent_idx]
     num_random_combos = 20*len(state_1)
     # num_random_combos = min(num_random_combos,100000)
 
-    combinations = np.zeros((num_random_combos, len(corresponding_probabilities)), dtype=int)
-    random_contexts = np.array([generate_random_context(env.context_dim) for i in range(num_random_combos)])
+    combinations = np.zeros((num_random_combos, len(match_probabilities)), dtype=int)
 
     budget = env.budget 
 
     # Fix for when the number of combinations is small (with respect to the budget)
     # In that scenario, we can essentially just manually compute
-    if len(corresponding_probabilities) <= env.budget-1:
-        if len(corresponding_probabilities) == 1:
-            return match_probabilities * state, memoizer_shapley
-        else: 
-            budget = 2
-
-    budget_probs = np.array([scipy.special.comb(len(corresponding_probabilities),k) for k in range(0,budget)])
+    budget_probs = np.array([scipy.special.comb(len(match_probabilities),k) for k in range(0,budget)])
     budget_probs /= np.sum(budget_probs)
 
     scores = []
+    indices = []
 
     for i in range(num_random_combos):
         k = random.choices(list(range(len(budget_probs))), weights=budget_probs,k=1)[0]
-        ones_indices = random.sample(list(range(len(corresponding_probabilities))),k)
+        ones_indices = random.sample(list(range(len(match_probabilities))),k)
         combinations[i, ones_indices] = 1
-        score = np.prod([(1-env.match_function(random_contexts[i],match_probabilities[j])) for j in range(len(state)) if combinations[i,j]])
+
+        rand_index = random.randint(0,len(match_probabilities)//2)
+        indices.append(rand_index)
+        score = np.prod([(1-match_probabilities[rand_index,j]) for j in range(len(state)) if combinations[i,j]])
         scores.append(score)
     
     scores = np.array(scores)
@@ -209,7 +205,7 @@ def shapley_index_contextual(env,state,memoizer_shapley = {}):
     for i in range(len(state_1)):
         avg_shapley = 0
         for j in np.where(combinations[:, i] == 0)[0]:
-            match_prob = env.match_function(random_contexts[j],match_probabilities[i])
+            match_prob = match_probabilities[indices[j]][i]
             avg_shapley += scores[j] - (1-match_prob)*scores[j]
         avg_shapley /= len(np.where(combinations[:, i] == 0)[0])
         shapley_indices[i] = avg_shapley
@@ -297,8 +293,8 @@ def whittle_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
 
     if memory == None:
         memoizer = Memoizer('optimal') 
-        match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
-        match_probs = [env.get_average_prob(match_probabilities[i],100) for i in range(N)]
+        match_probabilities = env.current_episode_match_probs[:,env.agent_idx]
+        match_probs = np.mean(match_probabilities,axis=0)
         #match_probs = [env.match_function(env.context,match_probabilities[i])*state[i] for i in range(N)]
     else:
         memoizer, match_probs = memory 
@@ -331,15 +327,14 @@ def whittle_policy_adjusted_contextual(env,state,budget,lamb,memory,per_epoch_re
     
     if memory == None:
         memoizer = Memoizer('optimal') 
-        match_probs = [env.get_average_prob(match_probabilities[i],100) for i in range(N)]
+        match_probabilities = env.current_episode_match_probs[:,env.agent_idx]
+        match_probs = np.mean(match_probabilities,axis=0)
     else:
         memoizer, match_probs = memory 
 
     state_WI = whittle_index(env,state,budget,lamb,memoizer,contextual=True,match_probs=match_probs)
-
-    for i in range(len(state_WI)):
-        if state[i] == 1:
-            state_WI[i] += (env.match_function(env.context,match_probabilities[i]) - match_probs[i])*(1-lamb)
+    current_match_probs = env.current_episode_match_probs[env.timestep + env.episode_count*env.episode_len][env.agent_idx]
+    state_WI += (current_match_probs-match_probs)*(1-lamb)
 
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
@@ -506,8 +501,7 @@ def greedy_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
 
     N = len(state)
 
-    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
-    match_probabilities = [env.match_function(env.context,match_probabilities[i]) for i in range(N)]
+    match_probabilities = env.current_episode_match_probs[env.timestep + env.episode_count*env.episode_len][env.agent_idx]
 
     score_by_agent = [0 for i in range(N)]
 
@@ -642,9 +636,8 @@ def whittle_greedy_contextual_policy(env,state,budget,lamb,memory, per_epoch_res
     state_WI = whittle_index(env,state,budget,lamb,memoizer,reward_function="activity")
     state_WI*=lamb 
 
-    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
-    match_probabilities = np.array([env.match_function(env.context,i) for i in match_probabilities])
-    match_probabilities *= state
+    match_probabilities = env.current_episode_match_probs[env.timestep + env.episode_count*env.episode_len][env.agent_idx]
+    match_probabilities *= state 
 
     state_WI += match_probabilities*(1-lamb)
 
@@ -887,11 +880,13 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
 
     all_rewards = []
     combined_reward = global_reward*(1-lamb) + lamb*active_rate
+    num_steps = 1
+    step_size = len(global_reward[0])//num_steps
 
     for epoch in range(len(global_reward)):
-        reward = 0
-        for t in range(len(global_reward[epoch])):
-            reward += combined_reward[epoch,t]*discount**(t)
-        all_rewards.append(reward)
-    
+        for i in range(num_steps):
+            reward = 0
+            for t in range(i*step_size,(i+1)*step_size):
+                reward += combined_reward[epoch,t]*discount**(t-i*step_size)
+            all_rewards.append(reward)
     return np.mean(all_rewards)

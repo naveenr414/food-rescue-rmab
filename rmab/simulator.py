@@ -1,6 +1,7 @@
 import gym
 import numpy as np
 import gymnasium.spaces as spaces
+from rmab.fr_dynamics import get_db_data, train_rf,  get_match_probabilities
 
 
 class RMABSimulator(gym.Env):
@@ -32,7 +33,7 @@ class RMABSimulator(gym.Env):
     '''
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
-            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],TIME_PER_RUN=10.0,match_function=None,context_dim=2):
+            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],TIME_PER_RUN=10.0,contextual=False):
         '''
         Initialization
         '''
@@ -51,9 +52,7 @@ class RMABSimulator(gym.Env):
         self.reward_style = reward_style # Should we get reward style based on states or matches
         self.match_probability_list = match_probability_list
         self.TIME_PER_RUN = TIME_PER_RUN
-        self.match_function = match_function
-        self.contextual = self.match_function != None
-        self.context_dim = context_dim
+        self.contextual = contextual 
         self.test_epochs = 0
         self.train_epochs = 0
 
@@ -70,6 +69,7 @@ class RMABSimulator(gym.Env):
         self.episode_count  = 0
         self.timestep       = 0
         self.total_active = 0
+        self.context_dim = 15
 
         # track indices of cohort members
         self.cohort_selection  = np.zeros((n_instances, cohort_size)).astype(int)
@@ -80,13 +80,28 @@ class RMABSimulator(gym.Env):
             for ep in range(n_episodes):
                 self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size*self.volunteers_per_arm)
 
+        if contextual: 
+            donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
+            rf_classifier, evaluation = train_rf()
+            self.all_match_probabilities = np.zeros((n_instances,n_episodes*episode_len,100 * self.volunteers_per_arm))
+            self.all_context_features = np.zeros((n_instances,n_episodes*episode_len,100 * self.volunteers_per_arm,15))
+
+            for i in range(n_instances):
+                self.all_match_probabilities[i], self.all_context_features[i]  = get_match_probabilities(n_episodes*episode_len,
+                                    self.volunteers_per_arm,[i for i in range(1,101)],
+                                    rf_classifier, rescues_by_user,all_rescue_data,
+                                    donation_id_to_latlon, recipient_location_to_latlon, 
+                                    user_id_to_latlon)
+            self.current_episode_match_probs = self.all_match_probabilities[0]
+            self.current_features = self.all_context_features[0]
+
     def reset_all(self):
         self.instance_count = -1
         self.total_active = 0
 
         return self.reset_instance()
 
-    def get_average_prob(self,volunteer_context,trials):
+    def get_average_prob(self,volunteer_num):
         """Get the average match probability across trials
         
         Arguments:
@@ -95,10 +110,7 @@ class RMABSimulator(gym.Env):
             
         Returns: Average probability, [0,1] float"""
 
-        tot = 0
-        for t in range(trials):
-            tot += self.match_function(generate_random_context(self.context_dim),volunteer_context)
-        return tot/trials
+        return np.mean(self.current_episode_match_probs[:,volunteer_num])
 
     def reset_instance(self):
         """ reset to a new environment instance """
@@ -107,6 +119,10 @@ class RMABSimulator(gym.Env):
         # get new cohort members
         self.cohort_idx       = self.cohort_selection[self.instance_count, :]
         self.agent_idx = []
+
+        if self.contextual:
+            self.current_episode_match_probs = self.all_match_probabilities[self.instance_count]
+            self.current_features = self.all_context_features[self.instance_count]
 
         for idx in self.cohort_idx:
             volunteer_ids = [idx*self.volunteers_per_arm+i for i in range(self.volunteers_per_arm)]
@@ -119,7 +135,6 @@ class RMABSimulator(gym.Env):
         # current state initialization
         self.timestep    = 0
         self.states      = self.first_init_states[self.instance_count, self.episode_count, :]  # np.copy??
-        self.context = generate_random_context(self.context_dim)
         return self.observe()
 
     def reset(self):
@@ -148,7 +163,6 @@ class RMABSimulator(gym.Env):
         # Current state initialization
         self.timestep    = 0
         self.states      = self.sample_initial_states(self.cohort_size)
-        self.context = generate_random_context(self.context_dim)
 
         return self.observe()
 
@@ -189,7 +203,6 @@ class RMABSimulator(gym.Env):
                 next_state = np.random.choice(a=self.number_states, p=prob)
                 next_states[idx] = next_state
 
-        self.context = generate_random_context(self.context_dim)
         self.states = next_states.astype(int)
         self.timestep += 1
 
@@ -208,225 +221,11 @@ class RMABSimulator(gym.Env):
             else:
                 self.total_active += np.sum(self.states)
                 if self.contextual:
-                    prod_state = [1-self.match_function(self.context,self.match_probability_list[self.agent_idx[i]])*action[i]*self.states[i] for i in range(len(self.agent_idx))]
+                    prod_state = 1-self.states*action*np.array(self.current_episode_match_probs[self.timestep + self.episode_count*self.episode_len])[self.agent_idx]
                 else:
                     prod_state = 1-self.states*action*np.array(self.match_probability_list)[self.agent_idx]
                 prob_all_inactive = np.prod(prod_state)
                 return 1-prob_all_inactive 
-
-class RMABSimulatorOpenRL(gym.Env):
-    '''
-    This simulator simulates the interaction with a set of arms with unknown transition probabilities
-    but with additional side information. This setup is aligned with restless multi-armed bandit problems
-    where we do not have repeated access to the same set of arms, but instead a set of new arms may
-    arrive in the next iteration with side information transferable between different iiterations.
-
-    The inputs of the simulator are listed below:
-
-        all_population: the total number of arms in the entire population
-        all_features: this is a numpy array with shape (all_population, feature_size)
-        all_transitions: this is a numpy array with shape (all_population, 2, 2)
-                        state (NE, E), action (NI, I), next state (E)
-        cohort_size: the number of arms arrive per iteration as a cohort
-        episode_len: the total number of time steps per episode iteration
-        budget: the number of arms that can be pulled in a time step
-
-
-    This simulation supports two different setting of the features:
-        - When features are multi-dimensional, the problem is a restless multi-armed bandit problem with
-        side information.
-        - When features are just single-dimensional with discrete values, the problem is a restless
-        multi-armed bandit problem with group information.
-        - In the extreme case where the group information is completely disjoint, it is the same as a
-        restless multi-armed bandit problem with no information.
-
-    '''
-
-    def __init__(self, all_population, all_features, all_transitions, cohort_size, episode_len, n_instances, n_episodes, budget,
-            number_states=2,reward_style='state',match_probability=0.5,lamb=0,**kwargs):
-        '''
-        Initialization
-        '''
-        self.all_population  = all_population
-        self.all_features    = all_features
-        self.all_transitions = all_transitions
-        self.cohort_size     = cohort_size
-        self.action_space = spaces.MultiBinary(self.cohort_size)  # 0-1 vectors for each agent
-        self.observation_space = spaces.Box(0, 1, [self.cohort_size], dtype=np.float32)  # Example observation space
-        self.budget          = budget
-        self.parallel_env_num = 1
-        self.env_name = "rmab_simulator"
-        self.number_states   = number_states
-        self.episode_len     = episode_len
-        self.n_episodes      = n_episodes   # total number of episodes per epoch
-        self.n_instances     = n_instances  # n_epochs: number of separate transitions / instances
-        self.reward_style = reward_style # Should we get reward style based on states or matches
-        self.match_probability = match_probability
-        self.agent_num = cohort_size
-        self.lamb = lamb 
-
-        assert_valid_transition(all_transitions)
-
-        # set up options for the multiple instances
-        # track the first random initial state
-        self.instance_count = 0
-        self.episode_count  = 0
-        self.timestep       = 0
-        self.total_active = 0
-        self.dim = 1
-
-        # track indices of cohort members
-        self.cohort_selection  = np.zeros((n_instances, cohort_size)).astype(int)
-        self.first_init_states = np.zeros((n_instances, n_episodes, cohort_size)).astype(int)
-        for i in range(n_instances):
-            self.cohort_selection[i, :] = np.random.choice(a=self.all_population, size=self.cohort_size, replace=False)
-            print('cohort', self.cohort_selection[i, :])
-            for ep in range(n_episodes):
-                self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size)
-
-        self.cohort_idx       = self.cohort_selection[0, :]
-        self.transitions = self.all_transitions[self.cohort_idx] # shape: cohort_size x n_states x 2 x n_states
-        
-
-    def reset_all(self):
-        self.instance_count = -1
-        self.total_active = 0
-        # self.reset_type = 'normal'
-
-        return self.reset_instance()
-
-    def reset_instance(self):
-        """ reset to a new environment instance """
-        self.instance_count += 1
-
-        # get new cohort members
-        self.cohort_idx       = self.cohort_selection[self.instance_count, :]
-        self.features    = self.all_features[self.cohort_idx]
-        self.transitions = self.all_transitions[self.cohort_idx] # shape: cohort_size x n_states x 2 x n_states
-        self.episode_count = 0
-
-        # current state initialization
-        self.timestep    = 0
-        self.states      = self.first_init_states[self.instance_count, self.episode_count, :]  # np.copy??
-
-
-        return self.observe(), {}
-
-    def reset(self,seed=42,**kwargs):
-        if kwargs['options'] != None:
-            reset_type = kwargs['options']['reset_type']
-        else:
-            reset_type = 'normal'
-        if reset_type == 'to_0':
-            return self.reset_to_episode_0()
-        elif reset_type == 'full':
-            return self.reset_all()
-        elif reset_type == 'instance':
-            return self.reset_instance()
-        else:
-            self.timestep      = 0
-            self.episode_count += 1
-            self.episode_count %= self.first_init_states.shape[1]
-
-            self.states        = self.first_init_states[self.instance_count, self.episode_count, :]
-            return self.observe(), {}
-
-    def reset_to_episode_0(self):
-        # self.reset_type = 'normal'
-        self.timestep = 0
-        self.episode_count = 0
-        self.total_active = 0
-        self.states        = self.first_init_states[self.instance_count, self.episode_count, :]
-        return self.observe(), {}
-
-
-    def fresh_reset(self):
-        '''
-        This function resets the environment to start over the interaction with arms. The main purpose of
-        this function is to sample a new set of arms (with number_arms arms) from the entire population.
-        This corresponds to an episode of the restless multi-armed bandit setting but with different
-        setup during each episode.
-
-        This simulator also supports infinite time horizon by setting the episode_len to infinity.
-        '''
-
-        # Sampling
-        sampled_arms     = np.random.choice(a=self.all_population, size=self.cohort_size, replace=False)
-        self.features    = self.all_features[sampled_arms]
-        self.transitions = self.all_transitions[sampled_arms] # shape: cohort_size x n_states x 2 x n_states
-
-        # Current state initialization
-        self.timestep    = 0
-        self.states      = self.sample_initial_states(self.cohort_size)
-
-        return self.observe()
-
-    def sample_initial_states(self, cohort_size, prob=0.5):
-        '''
-        Sampling initial states at random.
-        Input:
-            cohort_size: the number of arms to be initialized
-            prob: the probability of sampling 0 (not engaging state)
-        '''
-
-        states = np.random.choice(a=self.number_states, size=cohort_size, p=[prob, 1-prob])
-        return states
-
-    def is_terminal(self):
-        if self.timestep >= self.episode_len:
-            return True
-        else:
-            return False
-
-    def get_features(self):
-        return self.features
-
-    def observe(self):
-        return self.states
-
-    def step(self, action):
-        assert len(action) == self.cohort_size
-
-        reward = self.get_reward(action)
-
-        next_states = np.zeros(self.cohort_size)
-        for i in range(self.cohort_size):
-            prob = self.transitions[i, self.states[i], action[i], :]
-            next_state = np.random.choice(a=self.number_states, p=prob)
-            next_states[i] = next_state
-
-        self.states = next_states.astype(int)
-        self.timestep += 1
-
-        done = self.is_terminal()
-
-        return self.observe(), reward, done, {'total_active':self.total_active}
-
-    def get_reward(self,action=None):
-        if self.reward_style == 'state':
-            return np.sum(self.states)
-        elif self.reward_style == 'match':
-            if action is None:
-                return 0
-            if np.sum(action)>self.budget:
-                return -1000
-            num_active = np.sum(self.states*action)
-            self.total_active += np.sum(self.states)
-
-            prob_all_inactive = (1-self.match_probability)**num_active 
-            return 1-prob_all_inactive
-        elif self.reward_style == 'combined':
-            if action is None:
-                return 0
-            if np.sum(action)>self.budget:
-                return 0
-            num_active = np.sum(self.states*action)
-            self.total_active += np.sum(self.states)
-
-            prob_all_inactive = (1-self.match_probability)**num_active 
-            return (1-prob_all_inactive) + self.lamb * np.sum(self.states)
-
-
 
 def random_transition(all_population, n_states, n_actions):
     all_transitions = np.random.random((all_population, n_states, n_actions, n_states))

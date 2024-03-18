@@ -304,3 +304,29 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     r = 3956
     return r * c
+
+def binary_search_count(arr, element):
+    """
+    Performs binary search on a sorted list and returns the number of elements less than the given element.
+
+    Parameters:
+        arr (list): Sorted list of elements.
+        element: Element to find the count of elements less than it.
+
+    Returns:
+        int: Number of elements less than the given element.
+    """
+    left = 0
+    right = len(arr) - 1
+    count = 0
+
+    while left <= right:
+        mid = (left + right) // 2
+        
+        if arr[mid] < element:
+            count = mid + 1  # Increment count for current position
+            left = mid + 1
+        else:
+            right = mid - 1
+
+    return count
