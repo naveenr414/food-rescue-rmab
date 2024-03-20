@@ -56,9 +56,6 @@ class RMABSimulator(gym.Env):
         self.test_epochs = 0
         self.train_epochs = 0
 
-        if self.match_probability_list == []:
-            self.match_probability_list = [match_probability for i in range(self.cohort_size * self.volunteers_per_arm)]
-
         self.match_probability_list = np.array(self.match_probability_list)
 
         assert_valid_transition(all_transitions)
@@ -81,19 +78,21 @@ class RMABSimulator(gym.Env):
                 self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size*self.volunteers_per_arm)
 
         if contextual: 
-            donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
-            rf_classifier, evaluation = train_rf()
-            self.all_match_probabilities = np.zeros((n_instances,n_episodes*episode_len,100 * self.volunteers_per_arm))
-            self.all_context_features = np.zeros((n_instances,n_episodes*episode_len,100 * self.volunteers_per_arm,15))
+            if len(self.match_probability_list) > 0:
+                self.all_match_probabilities = self.match_probability_list
+            else:
+                donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
+                rf_classifier, evaluation = train_rf()
+                self.all_match_probabilities = np.zeros((n_instances,n_episodes*episode_len,100 * self.volunteers_per_arm))
+                self.all_context_features = np.zeros((n_instances,n_episodes*episode_len,100 * self.volunteers_per_arm,15))
 
-            for i in range(n_instances):
-                self.all_match_probabilities[i], self.all_context_features[i]  = get_match_probabilities(n_episodes*episode_len,
-                                    self.volunteers_per_arm,[i for i in range(1,101)],
-                                    rf_classifier, rescues_by_user,all_rescue_data,
-                                    donation_id_to_latlon, recipient_location_to_latlon, 
-                                    user_id_to_latlon)
+                for i in range(n_instances):
+                    self.all_match_probabilities[i], self.all_context_features[i]  = get_match_probabilities(n_episodes*episode_len,
+                                        self.volunteers_per_arm,[i for i in range(1,101)],
+                                        rf_classifier, rescues_by_user,all_rescue_data,
+                                        donation_id_to_latlon, recipient_location_to_latlon, 
+                                        user_id_to_latlon)
             self.current_episode_match_probs = self.all_match_probabilities[0]
-            self.current_features = self.all_context_features[0]
 
     def reset_all(self):
         self.instance_count = -1
@@ -122,7 +121,6 @@ class RMABSimulator(gym.Env):
 
         if self.contextual:
             self.current_episode_match_probs = self.all_match_probabilities[self.instance_count]
-            self.current_features = self.all_context_features[self.instance_count]
 
         for idx in self.cohort_idx:
             volunteer_ids = [idx*self.volunteers_per_arm+i for i in range(self.volunteers_per_arm)]

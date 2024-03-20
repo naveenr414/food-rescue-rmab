@@ -185,6 +185,10 @@ def aggregate_data(results):
                 if k not in ret_dict:
                     ret_dict[k] = []
                 ret_dict[k].append(l[k])
+            elif type(l[k]) == list and (type(l[k][0]) == int or type(l[k][0]) == float):
+                if k not in ret_dict:
+                    ret_dict[k] = []
+                ret_dict[k].append(l[k][0])
     
     for i in ret_dict:
         ret_dict[i] = (np.mean(ret_dict[i]),np.std(ret_dict[i]))

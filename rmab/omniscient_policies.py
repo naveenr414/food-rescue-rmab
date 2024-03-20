@@ -34,13 +34,16 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
     
     Returns: List of Whittle indices for each arm"""
     N = len(state) 
-    match_probability_list = np.array(env.match_probability_list)[env.agent_idx]
 
-    if shapley_values != None:
+    if reward_function == "activity":
+        match_probability_list = [0 for i in range(len(env.agent_idx))]
+    elif shapley_values != None:
         match_probability_list = np.array(shapley_values)
-
-    if contextual:
+    elif contextual:
         match_probability_list = match_probs
+    else:
+        match_probability_list = np.array(env.match_probability_list)[env.agent_idx]
+
 
     true_transitions = env.transitions 
     discount = env.discount 
@@ -323,7 +326,6 @@ def whittle_policy_adjusted_contextual(env,state,budget,lamb,memory,per_epoch_re
     Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
 
     N = len(state) 
-    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
     
     if memory == None:
         memoizer = Memoizer('optimal') 

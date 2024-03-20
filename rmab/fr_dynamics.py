@@ -700,7 +700,6 @@ def get_match_probabilities(T,volunteers_per_group,groups,rf_classifier,rescues_
 
     rescues = random.sample(all_rescue_data,T)
     for i in range(T):
-        print("On timestep {} out of {}".format(i,T))
         match_probs, current_feats = get_match_probs(rescues[i],
                         volunteer_ids,rf_classifier,donation_id_to_latlon, 
                         recipient_location_to_latlon, user_id_to_latlon, rescues_by_user)
@@ -708,5 +707,4 @@ def get_match_probabilities(T,volunteers_per_group,groups,rf_classifier,rescues_
         match_probabilities.append(match_probs)
         features.append(current_feats)
 
-    print("Size {}".format(np.array(features).shape))
     return np.array(match_probabilities), np.array(features) 

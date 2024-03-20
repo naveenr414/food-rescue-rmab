@@ -206,9 +206,14 @@ def update_value_function(past_states,past_actions,value_losses,value_network,cr
     state = past_states[random_point]
     action = past_actions[random_point]
     non_match_prob = 1
-    all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
-    for i in range(len(action)):
-        non_match_prob *= np.prod(1-all_match_probs[i]*action[i]*state[i])
+
+    if contextual:
+        match_probabilities = env.current_episode_match_probs[:,env.agent_idx]
+        all_match_probs = np.mean(match_probabilities,axis=0)
+    else:
+        all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
+        for i in range(len(action)):
+            non_match_prob *= np.prod(1-all_match_probs[i]*action[i]*state[i])
 
     samples = np.zeros((25,len(state)))
     for i in range(samples.shape[0]):
@@ -305,7 +310,8 @@ def get_policy_network_input_many_state(env,state_list,contextual=False):
     Returns: List of x_points, which can be turned into a Tensor 
         for the policy network"""
 
-    all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
+    if not contextual:
+        all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
     
     policy_network_size = 6+len(state_list[0])
     if contextual:
@@ -343,8 +349,9 @@ def get_policy_network_input(env,state,contextual=False):
     Returns: List of x_points, which can be turned into a Tensor 
         for the policy network"""
 
-    all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
-    
+    if not contextual:
+        all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
+
     x_points = []
     for i in range(len(state)):
         transition_points = env.transitions[i//env.volunteers_per_arm][:,:,1].flatten() 
@@ -415,9 +422,8 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=F
     """
 
     num_iterations = env.mcts_train_iterations
-    exploration_const = 10
-
-    policy_lr = 5e-4
+    value_lr = env.value_lr 
+    policy_lr = env.policy_lr 
     past_prefixes = {}
     last_prefixes = {}
     best_score = 0
@@ -425,7 +431,11 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=F
     network_update_frequency = 25
     num_network_updates = 25
     randomness_boost = 0.2 
-    all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
+
+    if not contextual:
+        all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
+    else:
+        all_match_probs = [0 for i in range(len(env.agent_idx))]
 
     if len(state) > 1000:
         gc.collect() 
@@ -437,9 +447,9 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=F
         past_actions = []
         value_losses = []
         policy_losses = []
-        value_network = MLP(len(state)*2, 64, 1)
+        value_network = MLP(len(state)*2, 512, 1)
         criterion_value = nn.MSELoss()
-        optimizer_value = optim.SGD(value_network.parameters(), lr=0.01)
+        optimizer_value = optim.SGD(value_network.parameters(), lr=value_lr)
         criterion_policy = nn.BCELoss()
         memoizer = Memoizer('optimal')
         policy_network_size = 6+len(state)
@@ -468,7 +478,6 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=F
     if contextual: 
         num_groups = len(state) 
         best_group_arms = []
-        all_match_probs = np.array(env.match_probability_list)[env.agent_idx]
         for g in range(num_groups):
             best_group_arms.append([g])
     else:
@@ -617,9 +626,8 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=F
             update_value_function(past_states,past_actions,value_losses,value_network,criterion_value,optimizer_value,
                                     policy_network,env,lamb,contextual=contextual)
 
-            if contextual and num_epochs+1 > 100: 
-                update_policy_function(past_states,past_actions,policy_losses,policy_network,
-                criterion_policy,optimizer_policy,env,contextual=contextual)
+            update_policy_function(past_states,past_actions,policy_losses,policy_network,
+            criterion_policy,optimizer_policy,env,contextual=contextual)
     if contextual:
         memory = past_states, past_values, past_actions, value_losses, value_network, criterion_value, optimizer_value, policy_losses, policy_network, criterion_policy, optimizer_policy, memoizer, match_probs
     else:
