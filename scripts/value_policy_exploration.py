@@ -59,7 +59,7 @@ if is_jupyter:
     value_lr=1e-4
     train_iterations = 30
     test_iterations = 30
-    out_folder = 'semi_synthetic_mcts'
+    out_folder = 'value_policy_exploration/exploration'
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
@@ -181,7 +181,9 @@ results['parameters'] = {'seed'      : seed,
         'time_per_run': TIME_PER_RUN, 
         'prob_distro': prob_distro, 
         'policy_lr': policy_lr, 
-        'value_lr': value_lr} 
+        'value_lr': value_lr, 
+        'train_iterations': train_iterations, 
+        'test_iterations': test_iterations,} 
 
 # ## Index Policies
 
@@ -210,6 +212,85 @@ if is_jupyter:
 
 if is_jupyter:
     plt.plot(plot_sliding_window(policy_loss_1))
+
+results['policy_loss'] = policy_loss_1
+results['value_loss'] = value_loss_1
+
+# ## Ground Truth Comparison
+
+if volunteers_per_arm * n_arms <= 4:
+    match_probability = simulator.match_probability_list 
+    if match_probability != []:
+        match_probability = np.array(match_probability)[simulator.agent_idx]
+    true_transitions = simulator.transitions
+    discount = simulator.discount 
+    budget = simulator.budget 
+
+    Q_vals = arm_value_iteration_exponential(true_transitions,discount,budget,simulator.volunteers_per_arm,
+                    reward_function='combined',lamb=lamb,
+                    match_probability_list=match_probability)
+
+    policy_network, value_network = memory[0][-4], memory[0][-8]
+    N = volunteers_per_arm*n_arms 
+    error_max_action = []
+    error_overall = []
+    for s in range(2**(volunteers_per_arm*n_arms)):
+        state = [int(j) for j in bin(s)[2:].zfill(N)]
+        max_q_val = np.max(Q_vals[s])
+        max_action = np.argmax(Q_vals[s])
+        action = [int(j) for j in bin(max_action)[2:].zfill(N)]
+        predicted_q_val = value_network(torch.Tensor([state+action])).item() 
+        error_max_action.append((predicted_q_val-max_q_val)**2)
+
+        for a in range(2**(volunteers_per_arm*n_arms)):
+            action = [int(j) for j in bin(a)[2:].zfill(N)]
+            predicted_q_val = value_network(torch.Tensor([state+action])).item()
+            actual_q_val = Q_vals[s][a]
+            error_overall.append((predicted_q_val-actual_q_val)**2)
+    
+    results['value_error_max_action'] = error_max_action
+    results['value_error_overall'] = error_overall     
+        
+
+# ## Monotonicity
+
+# +
+# Value Function monotonicity 
+num_trials = 100
+num_not_monotonic = 0 
+avg_diff = []
+
+for i in range(num_trials):
+    random_state = [random.randint(0,1) for i in range(n_arms*volunteers_per_arm)]
+    while sum(random_state) == n_arms*volunteers_per_arm:
+        random_state = [random.randint(0,1) for i in range(n_arms*volunteers_per_arm)]
+    choices = [i for i in range(n_arms*volunteers_per_arm) if random_state[i] == 0]
+    random_arm = random.choice(choices) 
+    random_action = [random.randint(0,1) for i in range(n_arms*volunteers_per_arm)]
+    
+    value_without = value_network(torch.Tensor(random_state+random_action)).item() 
+    random_state[random_arm] = 1
+    value_with = value_network(torch.Tensor(random_state+random_action)).item() 
+    if value_with < value_without:
+        num_not_monotonic += 1
+    avg_diff.append(value_with-value_without)
+
+results['num_not_monotonic'] = num_not_monotonic
+results['avg_monotonic_value_diff'] = avg_diff 
+# -
+
+# ## Policy Predictions
+
+# +
+avg_probabilities = []
+num_trials = 100
+
+for i in range(num_trials):
+    random_probs = policy_network(torch.Tensor(get_policy_network_input(simulator,[random.randint(0,1) for i in range(n_arms*volunteers_per_arm)],contextual=False)))
+    random_probs = random_probs.detach().numpy().flatten().tolist()
+    avg_probabilities.append(random_probs)
+results['policy_predictions_random'] = avg_probabilities
+# -
 
 # ## Write Data
 

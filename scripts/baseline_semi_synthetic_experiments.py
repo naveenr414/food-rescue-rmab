@@ -59,7 +59,7 @@ if is_jupyter:
     value_lr=1e-4
     train_iterations = 30
     test_iterations = 30
-    out_folder = 'semi_synthetic_mcts'
+    out_folder = 'real_data'
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
@@ -78,7 +78,7 @@ else:
     parser.add_argument('--value_lr', help='Learning Rate Value', type=float, default=1e-4)
     parser.add_argument('--train_iterations', help='Number of MCTS train iterations', type=int, default=30)
     parser.add_argument('--test_iterations', help='Number of MCTS test iterations', type=int, default=30)
-    parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='semi_synthetic_mcts')
+    parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='real_data')
 
     parser.add_argument('--use_date', action='store_true')
 
@@ -112,24 +112,20 @@ n_actions = 2
 all_population_size = 100 # number of random arms to generate
 all_transitions = get_all_transitions(all_population_size)
 
+match_probabilities_by_seed = {}
+
 
 def create_environment(seed):
     random.seed(seed)
     np.random.seed(seed)
 
-    if prob_distro == 'uniform':
-        match_probabilities = [np.random.random() for i in range(all_population_size * volunteers_per_arm)] 
-    elif prob_distro == 'uniform_small':
-        match_probabilities = [np.random.random()/4 for i in range(all_population_size * volunteers_per_arm)] 
-    elif prob_distro == 'uniform_large':
-        match_probabilities = [np.random.random()/4+0.75 for i in range(all_population_size * volunteers_per_arm)] 
-    elif prob_distro == 'normal':
-        match_probabilities = [np.clip(np.random.normal(0.25, 0.1),0,1) for i in range(all_population_size * volunteers_per_arm)] 
-
     all_features = np.arange(all_population_size)
-    match_probabilities = create_prob_distro(prob_distro,all_population_size*volunteers_per_arm)
+    match_probabilities = []
+
+    if seed in match_probabilities_by_seed:
+        match_probabilities = match_probabilities_by_seed[seed]
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
-                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='match',match_probability_list=match_probabilities,TIME_PER_RUN=TIME_PER_RUN)
+                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='match',match_probability_list=match_probabilities,TIME_PER_RUN=TIME_PER_RUN,contextual=True)
 
     return simulator 
 
@@ -187,29 +183,87 @@ results['parameters'] = {'seed'      : seed,
 
 seed_list = [seed]
 
-# +
-policy = full_mcts_policy 
-name = "mcts"
+for seed in seed_list:
+    simulator = create_environment(seed)
+    match_probabilities_by_seed[seed] = simulator.all_match_probabilities
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,train_iterations=train_iterations,test_iterations=test_iterations)
+# +
+policy = greedy_policy_contextual
+name = "greedy"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = random_policy
+name = "random"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = whittle_activity_policy
+name = "engagement_whittle"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = whittle_policy_contextual
+name = "linear_whittle"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = shapley_whittle_contextual_policy
+name = "shapley_whittle"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = whittle_greedy_contextual_policy
+name = "greedy_whittle"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = whittle_policy_adjusted_contextual
+name = "linear_whittle_adjusted"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
 print(np.mean(rewards['reward']))
 # -
-
-if is_jupyter:
-    def plot_sliding_window(data):
-        return [np.mean(data[i:i+100]) for i in range(len(data)-100)]
-    policy_loss_1 = memory[0][-5]
-    value_loss_1 = memory[0][-9]
-
-if is_jupyter:  
-    plt.plot(plot_sliding_window(value_loss_1))
-
-if is_jupyter:
-    plt.plot(plot_sliding_window(policy_loss_1))
 
 # ## Write Data
 
