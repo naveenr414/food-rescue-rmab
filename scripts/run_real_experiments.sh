@@ -1,6 +1,6 @@
 # Index runs
 
-for seed in 42 43 44
+for seed in 43 44 45
 do
     tmux new-session -d -s match_${seed}
     tmux send-keys -t match_${seed} ENTER 
@@ -35,7 +35,7 @@ done
 
 # MCTS Runs
 
-for seed in 42 43 44
+for seed in 43 44 45
 do
     tmux new-session -d -s match_${seed}
     tmux send-keys -t match_${seed} ENTER 

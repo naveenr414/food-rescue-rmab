@@ -198,8 +198,8 @@ print(np.mean(rewards['reward']))
 if is_jupyter:
     def plot_sliding_window(data):
         return [np.mean(data[i:i+100]) for i in range(len(data)-100)]
-    policy_loss_1 = memory[0][-5]
-    value_loss_1 = memory[0][-9]
+    policy_loss_1 = memory[0][-6]
+    value_loss_1 = memory[0][-10]
 
 if is_jupyter:  
     plt.plot(plot_sliding_window(value_loss_1))
