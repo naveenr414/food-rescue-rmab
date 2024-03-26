@@ -946,6 +946,7 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
     n_actions = env.all_transitions.shape[2]
     budget    = env.budget
     T         = env.episode_len * n_episodes
+    env.lamb = lamb 
 
     random.seed(seed)
     np.random.seed(seed)
