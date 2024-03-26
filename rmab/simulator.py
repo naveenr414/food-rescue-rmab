@@ -55,6 +55,7 @@ class RMABSimulator(gym.Env):
         self.contextual = contextual 
         self.test_epochs = 0
         self.train_epochs = 0
+        self.power = None # For the submodular runs 
 
         self.match_probability_list = np.array(self.match_probability_list)
 
@@ -224,6 +225,13 @@ class RMABSimulator(gym.Env):
                     prod_state = 1-self.states*action*np.array(self.match_probability_list)[self.agent_idx]
                 prob_all_inactive = np.prod(prod_state)
                 return 1-prob_all_inactive 
+        elif self.reward_style == 'submodular': 
+            assert self.power != None 
+            if action is None:
+                return 0
+            else:
+                probs = self.states*action*np.array(self.match_probability_list)[self.agent_idx]
+                return (np.sum(probs)+1)**self.power-1
 
 def random_transition(all_population, n_states, n_actions):
     all_transitions = np.random.random((all_population, n_states, n_actions, n_states))

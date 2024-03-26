@@ -10,8 +10,8 @@ from itertools import product, combinations
 from rmab.utils import binary_to_decimal, list_to_binary
 import random 
 
-whittle_threshold = 1e-4
-value_iteration_threshold = 1e-4
+whittle_threshold = 1e-6
+value_iteration_threshold = 1e-6
 
 def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
                         match_prob=0.5,get_v=False,num_arms=1):
@@ -27,9 +27,10 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
     difference = np.ones((n_states))
     iters = 0
 
+
     # lambda-adjusted reward function
     def reward(s, a):
-        return s - a * predicted_subsidy
+        return s/num_arms - a * predicted_subsidy
 
     def reward_matching(s,a):
         return s*a*match_prob - a*predicted_subsidy 
@@ -53,11 +54,11 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
                     r = combined_reward
                 else:
                     raise Exception("Reward function {} not found".format(reward_function))
-                     
+
                 # transitioning to state = 0
                 Q_func[s, a] += (1 - transitions[s, a]) * (r(s, a) + discount * value_func[0])
 
-                # transitioning to state = 1
+                # # transitioning to state = 1
                 Q_func[s, a] += transitions[s, a] * (r(s, a) + discount * value_func[1])
 
             value_func[s] = np.max(Q_func[s, :])
@@ -70,7 +71,7 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
     # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
     return Q_func[state,:]
 
-def arm_value_iteration_exponential(all_transitions, discount, budget, volunteers_per_arm, threshold=value_iteration_threshold,reward_function='matching',lamb=0,match_probability_list=[]):
+def arm_value_iteration_exponential(all_transitions, discount, budget, volunteers_per_arm, threshold=value_iteration_threshold,reward_function='matching',lamb=0,power=None,match_probability_list=[]):
     """ value iteration for a single arm at a time
 
     value iteration for the MDP defined by transitions with lambda-adjusted reward function
@@ -101,7 +102,6 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
     all_a = []
     for b in range(budget+1):
         all_a += list(combinations(range(N), b))
-    #all_a = list(combinations(range(N), budget))
     all_a = [np.array(list_to_binary(i,N)) for i in all_a]
 
     def reward_activity(s,a):
@@ -113,12 +113,18 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
     def reward_combined(s,a):
         return (1-np.prod(np.power(1-match_probability_list,s*a)))*(1-lamb) + lamb*np.sum(s)/len(s)
 
+    def reward_submodular(s,a):
+        return ((np.sum(match_probability_list*s*a)+1)**power-1)*(1-lamb) + lamb*np.sum(s)/len(s)
+
     if reward_function == 'activity':
         r = reward_activity
     elif reward_function == 'matching':
         r = reward_matching 
     elif reward_function == 'combined': 
         r = reward_combined 
+    elif reward_function == 'submodular':
+        assert power != None
+        r = reward_submodular
     else:
         raise Exception("{} reward function not found".format(reward_function))
 

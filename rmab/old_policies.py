@@ -1369,3 +1369,42 @@ def whittle_iterative(env,state,budget,lamb,memory, per_epoch_results):
     action[people_to_add] = 1
 
     return action, memoizer 
+
+def whittle_v_index(env,state,budget,lamb,memoizer,reward_function="combined",shapley_values=None):
+    """Get the Whittle indices for each agent in a given state
+    
+    Arguments:
+        env: Simualtor RMAB environment
+        state: Numpy array of 0-1 for each volunteer
+        budget: Max arms to pick 
+        lamb: Float, balancing matching and activity
+        memoizer: Object that stores previous Whittle index computations
+    
+    Returns: List of Whittle indices for each arm"""
+    N = len(state) 
+    match_probability_list = np.array(env.match_probability_list)[env.agent_idx]
+
+    if shapley_values != None:
+        match_probability_list = np.array(shapley_values)
+
+    true_transitions = env.transitions 
+    discount = env.discount 
+
+    state_WI = np.zeros((N))
+    state_V = np.zeros((N))
+    state_V_full = np.zeros((N,2))
+
+    min_chosen_subsidy = -1 
+    for i in range(N):
+        arm_transitions = true_transitions[i//env.volunteers_per_arm, :, :, 1]
+        check_set_val = memoizer.check_set(arm_transitions+round(match_probability_list[i],2), state[i])
+        if check_set_val != -1:
+            state_WI[i], state_V[i], state_V_full[i] = check_set_val
+        else:
+            state_WI[i], state_V[i], state_V_full[i] = arm_value_v_iteration(arm_transitions, state, 0, discount,reward_function=reward_function,lamb=lamb,
+                        match_prob=match_probability_list[i]) 
+            memoizer.add_set(arm_transitions+round(match_probability_list[i],2), state[i], (state_WI[i],state_V[i],state_V_full[i]))
+
+    return state_WI, state_V, state_V_full
+
+

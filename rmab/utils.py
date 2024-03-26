@@ -87,7 +87,7 @@ def get_results_matching_parameters(folder_name,result_name,parameters):
         load_file = json.load(open(file_name,"r"))
 
         for p in parameters:
-            if load_file['parameters'][p] != parameters[p]:
+            if p not in load_file['parameters'] or load_file['parameters'][p] != parameters[p]:
                 break 
         else:
             ret_results.append(load_file)

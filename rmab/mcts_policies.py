@@ -12,6 +12,7 @@ import torch.optim as optim
 from collections import Counter
 import gc 
 import time
+from sklearn.cluster import KMeans
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size,use_sigmoid=False):
@@ -230,15 +231,26 @@ def update_value_function(past_states,past_actions,value_losses,value_network,cr
 
     future_actions = get_action_state(policy_network,samples,env,contextual=contextual)
     future_actions = torch.Tensor(future_actions)
+
     future_states = torch.Tensor(samples)
     combined =  torch.cat((future_states, future_actions), dim=1)
     future_values = value_network(combined).detach().numpy()   
+    
+    # if len(past_states) > 500:
+    #     print("Future Values are {}".format(np.mean(future_values)))
 
-    future_values *= env.discount 
+    future_values *= env.discount
+
     future_values += (1-non_match_prob)*(1-lamb) + np.mean(state)*lamb
+
+    # if len(past_states) > 500:
+    #     print("Present values are {}".format((1-non_match_prob)*(1-lamb) + np.mean(state)*lamb))
+    #     print("Total values are {}".format(np.mean(future_values)))
+
     target = torch.Tensor(future_values)
     input_data = torch.Tensor([list(past_states[random_point])+list(past_actions[random_point]) for i in range(25)])
     output = value_network(input_data)
+
     loss_value = criterion_value(output,target)
     optimizer_value.zero_grad()
     loss_value.backward()
@@ -272,9 +284,9 @@ def update_policy_function(past_states,past_actions,policy_losses,policy_network
     target = torch.Tensor(past_actions[random_point])    
     x_points = torch.Tensor(get_policy_network_input(env,past_states[random_point],contextual=contextual))
 
-
     output = policy_network(x_points)
     loss_policy = criterion_policy(output,target.reshape(len(target),1))
+
     optimizer_policy.zero_grad()  
     loss_policy.backward()  
     optimizer_policy.step() 
@@ -379,7 +391,9 @@ def get_action_state(policy_network,state_list,env,contextual=False):
     policy_network_predictions = policy_network_predictions.numpy()
 
     action = np.zeros(np.array(state_list).shape, dtype=np.int8)
-    action[np.argsort(policy_network_predictions)[::-1][:env.budget]] = 1
+
+    for i in range(len(state_list)):
+        action[i][np.argsort(policy_network_predictions[i*len(state_list[0]):(i+1)*len(state_list[0])].flatten())[::-1][:env.budget]] = 1
     return action 
 
 def action_to_group_combo(action,best_group_arms):
@@ -404,9 +418,18 @@ def action_to_group_combo(action,best_group_arms):
     return full_combo, group_indices
 
 def full_mcts_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
-    return full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True)
+    return full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True,group_setup="none")
 
-def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=False):
+def full_mcts_policy_contextual_rand_group(env,state,budget,lamb,memory,per_epoch_results):
+    return full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True,group_setup="random")
+
+def full_mcts_policy_contextual_transition_group(env,state,budget,lamb,memory,per_epoch_results):
+    return full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True,group_setup="transition")
+
+def full_mcts_policy_contextual_whittle_group(env,state,budget,lamb,memory,per_epoch_results):
+    return full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True,group_setup="whittle")
+
+def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=False,group_setup="transition"):
     """Compute an MCTS policy by first splitting up into groups
         Then running MCTS, bootstrapped by a policy pi and a value V
         Upate pi, V, then return the best action
@@ -461,12 +484,15 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=F
         if contextual:
             match_probabilities = env.current_episode_match_probs[:,env.agent_idx]
             match_probs = np.mean(match_probabilities,axis=0)
+            best_group_arms = [] 
         else:
             whittle_index(env,[0 for i in range(len(all_match_probs))],budget,lamb,memoizer)
             whittle_index(env,[1 for i in range(len(all_match_probs))],budget,lamb,memoizer)
     else:
         if contextual:
-            match_probs = memory[-1]
+            other_info = memory[-1] 
+            match_probs = other_info['match_probs']
+            best_group_arms = other_info['best_group_arms']
             memory = memory[:-1]
         past_states, past_values, past_actions, \
         value_losses, value_network, criterion_value, optimizer_value, \
@@ -475,21 +501,56 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=F
     num_epochs = len(past_states)
 
     # Step 1: Group Setup
-    if contextual: 
+    if group_setup == "none":
         num_groups = len(state) 
         best_group_arms = []
         for g in range(num_groups):
             best_group_arms.append([g])
-    else:
+    elif group_setup == "random":
+        if best_group_arms == []:
+            num_groups = round(len(state)**.5)
+            elements_per_group = len(state)//num_groups 
+            all_elements = list(range(len(state)))
+            random.shuffle(all_elements)
+            best_group_arms = []
+
+            for i in range(num_groups):
+                if i == num_groups-1:
+                    best_group_arms.append(all_elements[elements_per_group*i:])
+                else:
+                    best_group_arms.append(all_elements[elements_per_group*i:elements_per_group*(i+1)])
+        num_groups = len(best_group_arms)
+    elif group_setup == "transition":
         num_groups = len(state)//env.volunteers_per_arm * 2 
         best_group_arms = []
         for g in range(num_groups//2):
-            matching_probs = all_match_probs[g*env.volunteers_per_arm:(g+1)*env.volunteers_per_arm]
+            if contextual: 
+                matching_probs = match_probs[g*env.volunteers_per_arm:(g+1)*env.volunteers_per_arm]
+            else:
+                matching_probs = all_match_probs[g*env.volunteers_per_arm:(g+1)*env.volunteers_per_arm]
             sorted_matching_probs = np.argsort(matching_probs)[::-1] + g*env.volunteers_per_arm
             sorted_matching_probs_0 = [i for i in sorted_matching_probs if state[i] == 0]
             sorted_matching_probs_1 = [i for i in sorted_matching_probs if state[i] == 1]
             best_group_arms.append(sorted_matching_probs_0)
             best_group_arms.append(sorted_matching_probs_1)
+    elif group_setup == "whittle":
+        if best_group_arms == []:
+            num_groups = round(len(state)**.5)
+            if contextual:
+                state_WI = whittle_index(env,[1 for i in range(len(state))],budget,lamb,memoizer,contextual=contextual,match_probs=match_probs)
+            else:
+                state_WI = whittle_index(env,state,budget,lamb,memoizer)
+            kmeans = KMeans(n_clusters=num_groups)
+            state_WI = np.array(state_WI).reshape(-1,1)
+            kmeans.fit(state_WI)
+            cluster_labels = kmeans.labels_
+            best_group_arms = [[] for i in range(num_groups)]
+
+            for i in range(len(cluster_labels)):
+                best_group_arms[cluster_labels[i]].append(i)
+
+        num_groups = len(best_group_arms)
+
 
     # Step 2: MCTS iterations
     # Get the probability for pulling each arm, in the same order
@@ -603,7 +664,7 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=F
                     should_break = True
         if should_break:
             break 
-
+        
     # Step 3: Find the best action/value from all combos, and backprop 
     # Find the best action/value combo 
     best_combo = get_best_combo(last_prefixes)
@@ -629,7 +690,7 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=F
             update_policy_function(past_states,past_actions,policy_losses,policy_network,
             criterion_policy,optimizer_policy,env,contextual=contextual)
     if contextual:
-        memory = past_states, past_values, past_actions, value_losses, value_network, criterion_value, optimizer_value, policy_losses, policy_network, criterion_policy, optimizer_policy, memoizer, match_probs
+        memory = past_states, past_values, past_actions, value_losses, value_network, criterion_value, optimizer_value, policy_losses, policy_network, criterion_policy, optimizer_policy, memoizer, {'match_probs': match_probs, 'best_group_arms': best_group_arms} 
     else:
         memory = past_states, past_values, past_actions, value_losses, value_network, criterion_value, optimizer_value, policy_losses, policy_network, criterion_policy, optimizer_policy, memoizer 
 
