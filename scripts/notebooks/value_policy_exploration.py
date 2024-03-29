@@ -30,7 +30,7 @@ import secrets
 from rmab.simulator import RMABSimulator
 from rmab.omniscient_policies import *
 from rmab.fr_dynamics import get_all_transitions
-from rmab.mcts_policies import full_mcts_policy, get_policy_network_input
+from rmab.mcts_policies import *
 from rmab.utils import get_save_path, delete_duplicate_results, create_prob_distro
 import resource
 
@@ -42,7 +42,7 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 42
+    seed        = 43
     n_arms      = 2
     volunteers_per_arm = 2
     budget      = 3
@@ -55,11 +55,11 @@ if is_jupyter:
     TIME_PER_RUN = 0.01 * 1000
     lamb = 0.5
     prob_distro = 'uniform'
-    policy_lr=5e-3
-    value_lr=1e-4
+    policy_lr=0.001
+    value_lr=0.01
     train_iterations = 30
     test_iterations = 30
-    out_folder = 'value_policy_exploration/exploration'
+    out_folder = 'mcts_exploration/value_policy_exploration/exploration'
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
@@ -74,11 +74,11 @@ else:
     parser.add_argument('--seed',           '-s', help='random seed', type=int, default=42)
     parser.add_argument('--prob_distro',           '-p', help='which prob distro [uniform,uniform_small,uniform_large,normal]', type=str, default='uniform')
     parser.add_argument('--time_per_run',      '-t', help='time per MCTS run', type=float, default=.01*1000)
-    parser.add_argument('--policy_lr', help='Learning Rate Policy', type=float, default=5e-3)
-    parser.add_argument('--value_lr', help='Learning Rate Value', type=float, default=1e-4)
+    parser.add_argument('--policy_lr', help='Learning Rate Policy', type=float, default=0.001)
+    parser.add_argument('--value_lr', help='Learning Rate Value', type=float, default=0.01)
     parser.add_argument('--train_iterations', help='Number of MCTS train iterations', type=int, default=30)
     parser.add_argument('--test_iterations', help='Number of MCTS test iterations', type=int, default=30)
-    parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='semi_synthetic_mcts')
+    parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='mcts_exploration/value_policy_exploration/exploration')
 
     parser.add_argument('--use_date', action='store_true')
 
@@ -193,6 +193,8 @@ seed_list = [seed]
 policy = full_mcts_policy 
 name = "mcts"
 
+train_iterations = 30
+
 rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,train_iterations=train_iterations,test_iterations=test_iterations)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
@@ -205,8 +207,8 @@ print(np.mean(rewards['reward']))
 
 def plot_sliding_window(data):
     return [np.mean(data[i:i+100]) for i in range(len(data)-100)]
-policy_loss_1 = memory[0][-5]
-value_loss_1 = memory[0][-9]
+policy_loss_1 = memory[0][-6]
+value_loss_1 = memory[0][-10]
 
 if is_jupyter:  
     plt.plot(plot_sliding_window(value_loss_1))
@@ -219,7 +221,7 @@ results['value_loss'] = value_loss_1
 
 # ## Ground Truth Comparison
 
-policy_network, value_network = memory[0][-4], memory[0][-8]
+policy_network, value_network = memory[0][-5], memory[0][-9]
 
 if volunteers_per_arm * n_arms <= 4:
     match_probability = simulator.match_probability_list 
@@ -243,6 +245,8 @@ if volunteers_per_arm * n_arms <= 4:
         action = [int(j) for j in bin(max_action)[2:].zfill(N)]
         predicted_q_val = value_network(torch.Tensor([state+action])).item() 
         error_max_action.append((predicted_q_val-max_q_val)**2)
+
+        print(predicted_q_val,max_q_val)
 
         for a in range(2**(volunteers_per_arm*n_arms)):
             action = [int(j) for j in bin(a)[2:].zfill(N)]
@@ -288,7 +292,7 @@ avg_probabilities = []
 num_trials = 100
 
 for i in range(num_trials):
-    random_probs = policy_network(torch.Tensor(get_policy_network_input(simulator,[random.randint(0,1) for i in range(n_arms*volunteers_per_arm)],contextual=False)))
+    random_probs = policy_network(torch.Tensor(get_policy_network_input_many_state(simulator,np.array([[random.randint(0,1) for i in range(n_arms*volunteers_per_arm)]]),contextual=False)))
     random_probs = random_probs.detach().numpy().flatten().tolist()
     avg_probabilities.append(random_probs)
 results['policy_predictions_random'] = avg_probabilities
@@ -300,6 +304,6 @@ save_path = get_save_path(out_folder,save_name,seed,use_date=save_with_date)
 
 delete_duplicate_results(out_folder,"",results)
 
-json.dump(results,open('../results/'+save_path,'w'))
+json.dump(results,open('../../results/'+save_path,'w'))
 
 

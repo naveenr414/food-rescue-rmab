@@ -48,24 +48,24 @@ if is_jupyter:
     budget      = 3
     discount    = 0.9
     alpha       = 3 
-    n_episodes  = 100
+    n_episodes  = 50
     episode_len = 20 
     n_epochs    = 1 
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
     lamb = 0.5
     prob_distro = 'uniform'
-    policy_lr=5e-3
-    value_lr=1e-4
+    policy_lr=0.001
+    value_lr=0.01
     train_iterations = 30
     test_iterations = 30
-    out_folder = 'real_data_mcts'
+    out_folder = 'mcts_exploration/mcts_bucketing'
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
     parser.add_argument('--volunteers_per_arm',         '-V', help='volunteers per arm', type=int, default=5)
     parser.add_argument('--episode_len',    '-H', help='episode length', type=int, default=20)
-    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=200)
+    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=100)
     parser.add_argument('--budget',         '-B', help='budget', type=int, default=3)
     parser.add_argument('--n_epochs',       '-E', help='number of epochs (num_repeats)', type=int, default=1)
     parser.add_argument('--discount',       '-d', help='discount factor', type=float, default=0.9)
@@ -74,11 +74,11 @@ else:
     parser.add_argument('--seed',           '-s', help='random seed', type=int, default=42)
     parser.add_argument('--prob_distro',           '-p', help='which prob distro [uniform,uniform_small,uniform_large,normal]', type=str, default='uniform')
     parser.add_argument('--time_per_run',      '-t', help='time per MCTS run', type=float, default=.01*1000)
-    parser.add_argument('--policy_lr', help='Learning Rate Policy', type=float, default=5e-3)
-    parser.add_argument('--value_lr', help='Learning Rate Value', type=float, default=1e-4)
+    parser.add_argument('--policy_lr', help='Learning Rate Policy', type=float, default=0.001)
+    parser.add_argument('--value_lr', help='Learning Rate Value', type=float, default=0.01)
     parser.add_argument('--train_iterations', help='Number of MCTS train iterations', type=int, default=30)
     parser.add_argument('--test_iterations', help='Number of MCTS test iterations', type=int, default=30)
-    parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='real_data_mcts')
+    parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='mcts_exploration/mcts_bucketing')
 
     parser.add_argument('--use_date', action='store_true')
 
@@ -137,6 +137,7 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
         'time': [], 
         'match': [], 
         'active_rate': [],
+        'train_time': [], 
     }
 
     for seed in seed_list:
@@ -152,10 +153,12 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
         else:
             match, active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=test_length,per_epoch_function=per_epoch_function)
         time_whittle = simulator.time_taken
+        train_time = simulator.train_time
         discounted_reward = get_discounted_reward(match,active_rate,discount,lamb)
         scores['reward'].append(discounted_reward)
         scores['time'].append(time_whittle)
         scores['match'].append(np.mean(match))
+        scores['train_time'].append(train_time)
         scores['active_rate'].append(np.mean(active_rate))
         if is_mcts:
             memories.append(memory)
@@ -179,9 +182,13 @@ results['parameters'] = {'seed'      : seed,
         'policy_lr': policy_lr, 
         'value_lr': value_lr} 
 
-# ## Index Policies
+# ## MCTS Policies
 
 seed_list = [seed]
+
+for seed in seed_list:
+    simulator = create_environment(seed)
+    match_probabilities_by_seed[seed] = simulator.all_match_probabilities
 
 # +
 policy = full_mcts_policy_contextual 
@@ -192,6 +199,43 @@ results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
+results['{}_train_time'.format(name)] = rewards['train_time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = full_mcts_policy_contextual_rand_group 
+name = "mcts_rand_group"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,train_iterations=train_iterations,test_iterations=test_iterations)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+results['{}_train_time'.format(name)] = rewards['train_time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = full_mcts_policy_contextual_transition_group
+name = "mcts_contextual"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,train_iterations=train_iterations,test_iterations=test_iterations)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+results['{}_train_time'.format(name)] = rewards['train_time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = full_mcts_policy_contextual_whittle_group
+name = "mcts_whittle"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,train_iterations=train_iterations,test_iterations=test_iterations)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+results['{}_train_time'.format(name)] = rewards['train_time']
 print(np.mean(rewards['reward']))
 # -
 
