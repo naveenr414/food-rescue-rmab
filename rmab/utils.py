@@ -80,7 +80,7 @@ def get_results_matching_parameters(folder_name,result_name,parameters):
         
     Returns: List of Dictionaries"""
 
-    all_results = glob.glob("../results/{}/{}*.json".format(folder_name,result_name))
+    all_results = glob.glob("../../results/{}/{}*.json".format(folder_name,result_name))
     ret_results = []
 
     for file_name in all_results:

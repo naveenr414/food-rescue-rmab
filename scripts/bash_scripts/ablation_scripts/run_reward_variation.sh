@@ -4,7 +4,7 @@ for seed in 43 44 45
 do
     tmux new-session -d -s match_${seed}
     tmux send-keys -t match_${seed} ENTER 
-    tmux send-keys -t match_${seed} "cd ~/projects/food_rescue_rmab/scripts" ENTER
+    tmux send-keys -t match_${seed} "cd ~/projects/food_rescue_rmab/scripts/notebooks" ENTER
 
     for power in 0.1 0.25 0.5 0.75 1 
     do 

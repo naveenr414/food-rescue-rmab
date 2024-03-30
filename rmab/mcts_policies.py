@@ -13,13 +13,15 @@ from collections import Counter
 import gc 
 import time
 from sklearn.cluster import KMeans
+import torch.nn.functional as F
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size,use_sigmoid=False):
         super(MLP, self).__init__()
         self.fc1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, output_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, output_size)
         self.use_sigmoid = use_sigmoid 
         self.sigmoid = nn.Sigmoid()
         
@@ -27,9 +29,8 @@ class MLP(nn.Module):
         x = self.fc1(x)
         x = self.relu(x)
         x = self.fc2(x)
-
-        if self.use_sigmoid:
-            x = self.sigmoid(x)
+        x = self.relu(x)
+        x = self.fc3(x)
 
         return x
 
@@ -412,6 +413,224 @@ def full_mcts_policy_contextual_transition_group(env,state,budget,lamb,memory,pe
 def full_mcts_policy_contextual_whittle_group(env,state,budget,lamb,memory,per_epoch_results):
     return full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True,group_setup="whittle")
 
+def get_groups(group_setup,best_group_arms,state,env,match_probs,all_match_probs,contextual,lamb,memoizer,budget):
+    if group_setup == "none":
+        num_groups = len(state) 
+        best_group_arms = []
+        for g in range(num_groups):
+            best_group_arms.append([g])
+    elif group_setup == "random":
+        if best_group_arms == []:
+            num_groups = round(len(state)**.5)
+            elements_per_group = len(state)//num_groups 
+            all_elements = list(range(len(state)))
+            random.shuffle(all_elements)
+            best_group_arms = []
+
+            for i in range(num_groups):
+                if i == num_groups-1:
+                    best_group_arms.append(all_elements[elements_per_group*i:])
+                else:
+                    best_group_arms.append(all_elements[elements_per_group*i:elements_per_group*(i+1)])
+        num_groups = len(best_group_arms)
+    elif group_setup == "transition":
+        num_groups = len(state)//env.volunteers_per_arm * 2 
+        best_group_arms = []
+        for g in range(num_groups//2):
+            if contextual: 
+                matching_probs = match_probs[g*env.volunteers_per_arm:(g+1)*env.volunteers_per_arm]
+            else:
+                matching_probs = all_match_probs[g*env.volunteers_per_arm:(g+1)*env.volunteers_per_arm]
+            sorted_matching_probs = np.argsort(matching_probs)[::-1] + g*env.volunteers_per_arm
+            sorted_matching_probs_0 = [i for i in sorted_matching_probs if state[i] == 0]
+            sorted_matching_probs_1 = [i for i in sorted_matching_probs if state[i] == 1]
+            best_group_arms.append(sorted_matching_probs_0)
+            best_group_arms.append(sorted_matching_probs_1)
+    elif group_setup == "whittle":
+        if best_group_arms == []:
+            num_groups = round(len(state)**.5)
+            if contextual:
+                state_WI = whittle_index(env,[1 for i in range(len(state))],budget,lamb,memoizer,contextual=contextual,match_probs=match_probs)
+            else:
+                state_WI = whittle_index(env,state,budget,lamb,memoizer)
+            kmeans = KMeans(n_clusters=num_groups)
+            state_WI = np.array(state_WI).reshape(-1,1)
+            kmeans.fit(state_WI)
+            cluster_labels = kmeans.labels_
+            best_group_arms = [[] for i in range(num_groups)]
+
+            for i in range(len(cluster_labels)):
+                best_group_arms[cluster_labels[i]].append(i)
+
+        num_groups = len(best_group_arms)
+    
+    return best_group_arms
+
+from collections import namedtuple, deque
+Transition = namedtuple('Transition',
+                        ('state', 'action', 'next_state', 'reward'))
+
+class ReplayMemory(object):
+
+    def __init__(self, capacity):
+        self.memory = deque([], maxlen=capacity)
+
+    def push(self, *args):
+        """Save a transition"""
+        self.memory.append(Transition(*args))
+
+    def sample(self, batch_size):
+        return random.sample(self.memory, batch_size)
+
+    def __len__(self):
+        return len(self.memory)
+
+class DQN(nn.Module):
+
+    def __init__(self, n_observations, n_actions):
+        super(DQN, self).__init__()
+        self.layer1 = nn.Linear(n_observations, 128)
+        self.layer2 = nn.Linear(128, 128)
+        self.layer3 = nn.Linear(128, n_actions)
+
+    # Called with either one element to determine next action, or a batch
+    # during optimization. Returns tensor([[left0exp,right0exp]...]).
+    def forward(self, x):
+        x = F.relu(self.layer1(x))
+        x = F.relu(self.layer2(x))
+        return self.layer3(x)
+
+
+def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    """Use a DQN policy to compute the action values
+    
+    Arguments: 
+        env: Simulator Environment
+        state: Num Agents x 2 numpy array (0-1)
+        budget: Integer, how many arms we can pull
+        Lamb: Balance between engagement, global reward
+        Memory: Contains the V, Pi network
+        per_epoch_results: Optional argument, nothing for this 
+    Returns: Numpy array, action"""
+
+    def get_reward(state,action,match_probs):
+        prod_state = 1-state*action*np.array(match_probs)
+        prob_all_inactive = np.prod(prod_state)
+        return (1-prob_all_inactive)*(1-lamb) + np.sum(state)/len(state)*lamb
+
+
+    # Hyperparameters + Parameters 
+    
+    value_lr = 1e-4
+    train_epochs = env.train_epochs
+    N = len(state) 
+    match_probs = np.array(env.match_probability_list)[env.agent_idx]
+    epsilon = 1
+    target_update_freq = 256
+    batch_size = 64
+    discount = env.discount
+    MAX_REPLAY_SIZE = 512
+    tau = 1
+    valid_actions = []
+    for action_num in range(2**(N)):
+        action = [int(j) for j in bin(action_num)[2:].zfill(N)]
+        if sum(action) <= budget:
+            valid_actions.append(action)
+
+    # Compute the groups 
+    best_group_arms = get_groups(group_setup,[],state,env,[],[],False,lamb,Memoizer('optimal'),budget) 
+
+    # Unpack the memory 
+    if memory == None:
+        past_states = []
+        past_actions = []
+        past_rewards = []
+        q_losses = []
+        q_network = MLP(len(state), 128, len(valid_actions))
+        criterion = nn.MSELoss()
+        optimizer = optim.Adam(q_network.parameters(), lr=value_lr)
+        target_model = MLP(len(state), 128, len(valid_actions))
+        target_model.load_state_dict(q_network.state_dict())
+        target_model = target_model.eval()
+        avg_rewards = []
+        current_epoch = 0
+    else:
+        past_states, past_actions, past_rewards, q_losses, q_network, criterion, optimizer, target_model, current_epoch, avg_rewards = memory
+    
+
+    current_epoch += 1
+
+    if current_epoch < train_epochs:
+         if len(past_states) > batch_size+2:
+            random_memories = random.sample(list(range(len(past_states)-2)),batch_size)
+            sample_state = np.array(past_states)[random_memories]
+            sample_action = np.array(past_actions)[random_memories]
+            action_idx = np.array([valid_actions.index(i) for i in sample_action])
+            action_idx = torch.Tensor(action_idx).long()
+            sample_reward = np.array(past_rewards)[random_memories]
+            sample_reward = torch.Tensor(sample_reward)
+            sample_state_next = np.array(past_states)[np.array(random_memories)+1]
+
+            current_state_q = q_network(torch.Tensor(torch.Tensor(sample_state)))
+            action_idx = action_idx.unsqueeze(1)
+            current_state_value = torch.gather(current_state_q, 1, action_idx)
+
+            future_state_q = target_model(torch.Tensor(sample_state_next))
+            future_state_value = future_state_q.max(1).values
+            total_current_value = future_state_value * discount + sample_reward 
+
+            loss = criterion(total_current_value, current_state_value.squeeze())
+            q_losses.append(loss.item())
+            avg_rewards.append(q_network(torch.Tensor([[1]]))[0][1].item())
+
+            optimizer.zero_grad() 
+            loss.backward() 
+            optimizer.step() 
+
+            print("Target is {}".format(total_current_value[0]))
+            print("Current state value {}".format(current_state_value[0]))
+            print("Avg reward",avg_rewards[-1])
+            print("Target network {}".format(target_model(torch.Tensor([[1]]))[0][1].item()))
+
+            if current_epoch == train_epochs - 1:
+                print("States {}".format(sample_state))
+                print("Sample Action {}".format(sample_action))
+                print("Diff {}".format(current_state_value-total_current_value))
+                print("Q network {}".format(q_network(torch.Tensor([[0],[1]]))))
+
+
+
+    # Update the target model
+    if current_epoch < train_epochs and current_epoch % target_update_freq == 0:
+        for target_param, local_param in zip(target_model.parameters(), q_network.parameters()):
+                target_param.data.copy_(tau*local_param.data+(1-tau)*target_param.data)
+
+    
+    # # Compute the best action
+    max_action = [0 for i in range(N)]
+    action_values = q_network(torch.Tensor([state]))[0]
+
+    max_action = valid_actions[torch.argmax(action_values)]
+
+    if random.random() < epsilon and current_epoch < train_epochs:
+        action = random.sample(valid_actions,1)[0]
+    else:
+        action = max_action
+    
+    if len(past_states) > MAX_REPLAY_SIZE:
+        past_states = past_states[-MAX_REPLAY_SIZE:]
+        past_actions = past_actions[-MAX_REPLAY_SIZE:]
+        past_rewards = past_rewards[-MAX_REPLAY_SIZE:]
+
+    past_states.append(state)
+    past_actions.append(action)
+    past_rewards.append(get_reward(state,action,match_probs))
+
+    # Repack the memory
+    memory = past_states, past_actions, past_rewards, q_losses, q_network, criterion, optimizer, target_model, current_epoch, avg_rewards
+
+    return action, memory
+
 def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=False,group_setup="transition",
                         run_ucb = True, use_whittle=True):
     """Compute an MCTS policy by first splitting up into groups
@@ -485,55 +704,8 @@ def full_mcts_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=F
     num_epochs = len(past_states)
 
     # Step 1: Group Setup
-    if group_setup == "none":
-        num_groups = len(state) 
-        best_group_arms = []
-        for g in range(num_groups):
-            best_group_arms.append([g])
-    elif group_setup == "random":
-        if best_group_arms == []:
-            num_groups = round(len(state)**.5)
-            elements_per_group = len(state)//num_groups 
-            all_elements = list(range(len(state)))
-            random.shuffle(all_elements)
-            best_group_arms = []
-
-            for i in range(num_groups):
-                if i == num_groups-1:
-                    best_group_arms.append(all_elements[elements_per_group*i:])
-                else:
-                    best_group_arms.append(all_elements[elements_per_group*i:elements_per_group*(i+1)])
-        num_groups = len(best_group_arms)
-    elif group_setup == "transition":
-        num_groups = len(state)//env.volunteers_per_arm * 2 
-        best_group_arms = []
-        for g in range(num_groups//2):
-            if contextual: 
-                matching_probs = match_probs[g*env.volunteers_per_arm:(g+1)*env.volunteers_per_arm]
-            else:
-                matching_probs = all_match_probs[g*env.volunteers_per_arm:(g+1)*env.volunteers_per_arm]
-            sorted_matching_probs = np.argsort(matching_probs)[::-1] + g*env.volunteers_per_arm
-            sorted_matching_probs_0 = [i for i in sorted_matching_probs if state[i] == 0]
-            sorted_matching_probs_1 = [i for i in sorted_matching_probs if state[i] == 1]
-            best_group_arms.append(sorted_matching_probs_0)
-            best_group_arms.append(sorted_matching_probs_1)
-    elif group_setup == "whittle":
-        if best_group_arms == []:
-            num_groups = round(len(state)**.5)
-            if contextual:
-                state_WI = whittle_index(env,[1 for i in range(len(state))],budget,lamb,memoizer,contextual=contextual,match_probs=match_probs)
-            else:
-                state_WI = whittle_index(env,state,budget,lamb,memoizer)
-            kmeans = KMeans(n_clusters=num_groups)
-            state_WI = np.array(state_WI).reshape(-1,1)
-            kmeans.fit(state_WI)
-            cluster_labels = kmeans.labels_
-            best_group_arms = [[] for i in range(num_groups)]
-
-            for i in range(len(cluster_labels)):
-                best_group_arms[cluster_labels[i]].append(i)
-
-        num_groups = len(best_group_arms)
+    best_group_arms = get_groups(group_setup,best_group_arms,state,env,match_probs,all_match_probs,contextual,lamb,memoizer,budget) 
+    num_groups = len(best_group_arms)
 
 
     # Step 2: MCTS iterations

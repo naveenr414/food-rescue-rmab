@@ -101,7 +101,8 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
     
     all_a = []
     for b in range(budget+1):
-        all_a += list(combinations(range(N), b))
+        all_a += list(combinations(range(N), b))    
+
     all_a = [np.array(list_to_binary(i,N)) for i in all_a]
 
     def reward_activity(s,a):
@@ -111,7 +112,8 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
         return (1-np.prod(np.power(1-match_probability_list,s*a)))
         
     def reward_combined(s,a):
-        return (1-np.prod(np.power(1-match_probability_list,s*a)))*(1-lamb) + lamb*np.sum(s)/len(s)
+        rew = (1-np.prod(np.power(1-match_probability_list,s*a)))*(1-lamb) + lamb*np.sum(s)/len(s)
+        return rew
 
     def reward_submodular(s,a):
         return ((np.sum(match_probability_list*s*a)+1)**power-1)*(1-lamb) + lamb*np.sum(s)/len(s)
@@ -152,11 +154,9 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
         for s in all_s:
             s_rep = binary_to_decimal(s) 
 
+
             for a in all_a:
                 a_rep = binary_to_decimal(a)
-                action = np.zeros(N)
-                for i in a:
-                    action[i] = 1 
 
                 for s_prime in all_s:
                     s_prime_rep = binary_to_decimal(s_prime)
@@ -164,7 +164,6 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
                          + discount * value_func[s_prime_rep])
             value_func[s_rep] = np.max(Q_func[s_rep, :])
         difference = np.abs(orig_value_func - value_func)
-
     return Q_func 
 
 def arm_value_iteration(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
