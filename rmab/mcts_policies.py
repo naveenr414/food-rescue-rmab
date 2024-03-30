@@ -14,6 +14,7 @@ import gc
 import time
 from sklearn.cluster import KMeans
 import torch.nn.functional as F
+import torch.optim.lr_scheduler as lr_scheduler
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size,use_sigmoid=False):
@@ -521,24 +522,23 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
 
     # Hyperparameters + Parameters 
     
-    value_lr = 1e-4
+    value_lr = 5e-5
     train_epochs = env.train_epochs
     N = len(state) 
     match_probs = np.array(env.match_probability_list)[env.agent_idx]
-    epsilon = 1
-    target_update_freq = 256
-    batch_size = 64
+    epsilon = 0.05
+    target_update_freq = 1
+    batch_size = 128
     discount = env.discount
     MAX_REPLAY_SIZE = 512
-    tau = 1
+    tau = 0.001
     valid_actions = []
+    action_to_idx = {}
     for action_num in range(2**(N)):
         action = [int(j) for j in bin(action_num)[2:].zfill(N)]
         if sum(action) <= budget:
             valid_actions.append(action)
-
-    # Compute the groups 
-    best_group_arms = get_groups(group_setup,[],state,env,[],[],False,lamb,Memoizer('optimal'),budget) 
+            action_to_idx[''.join([str(i) for i in action])] = len(valid_actions)-1
 
     # Unpack the memory 
     if memory == None:
@@ -554,8 +554,9 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
         target_model = target_model.eval()
         avg_rewards = []
         current_epoch = 0
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=10000, gamma=0.01)
     else:
-        past_states, past_actions, past_rewards, q_losses, q_network, criterion, optimizer, target_model, current_epoch, avg_rewards = memory
+        past_states, past_actions, past_rewards, q_losses, q_network, criterion, optimizer, scheduler, target_model, current_epoch, avg_rewards = memory
     
 
     current_epoch += 1
@@ -565,7 +566,7 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
             random_memories = random.sample(list(range(len(past_states)-2)),batch_size)
             sample_state = np.array(past_states)[random_memories]
             sample_action = np.array(past_actions)[random_memories]
-            action_idx = np.array([valid_actions.index(i) for i in sample_action])
+            action_idx = np.array([action_to_idx[''.join([str(j) for j in i])] for i in sample_action])
             action_idx = torch.Tensor(action_idx).long()
             sample_reward = np.array(past_rewards)[random_memories]
             sample_reward = torch.Tensor(sample_reward)
@@ -579,24 +580,14 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
             future_state_value = future_state_q.max(1).values
             total_current_value = future_state_value * discount + sample_reward 
 
-            loss = criterion(total_current_value, current_state_value.squeeze())
+            loss = criterion(current_state_value.squeeze(),total_current_value)
             q_losses.append(loss.item())
-            avg_rewards.append(q_network(torch.Tensor([[1]]))[0][1].item())
+            avg_rewards.append(q_network(torch.Tensor([[1 for i in range(len(state))]]))[0][1].item())
 
             optimizer.zero_grad() 
             loss.backward() 
             optimizer.step() 
-
-            print("Target is {}".format(total_current_value[0]))
-            print("Current state value {}".format(current_state_value[0]))
-            print("Avg reward",avg_rewards[-1])
-            print("Target network {}".format(target_model(torch.Tensor([[1]]))[0][1].item()))
-
-            if current_epoch == train_epochs - 1:
-                print("States {}".format(sample_state))
-                print("Sample Action {}".format(sample_action))
-                print("Diff {}".format(current_state_value-total_current_value))
-                print("Q network {}".format(q_network(torch.Tensor([[0],[1]]))))
+            scheduler.step()
 
 
 
@@ -607,7 +598,6 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
 
     
     # # Compute the best action
-    max_action = [0 for i in range(N)]
     action_values = q_network(torch.Tensor([state]))[0]
 
     max_action = valid_actions[torch.argmax(action_values)]
@@ -627,7 +617,144 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
     past_rewards.append(get_reward(state,action,match_probs))
 
     # Repack the memory
-    memory = past_states, past_actions, past_rewards, q_losses, q_network, criterion, optimizer, target_model, current_epoch, avg_rewards
+    memory = past_states, past_actions, past_rewards, q_losses, q_network, criterion, optimizer, scheduler, target_model, current_epoch,avg_rewards
+
+    return action, memory
+
+def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    """Use a DQN policy to compute the action values
+    
+    Arguments: 
+        env: Simulator Environment
+        state: Num Agents x 2 numpy array (0-1)
+        budget: Integer, how many arms we can pull
+        Lamb: Balance between engagement, global reward
+        Memory: Contains the V, Pi network
+        per_epoch_results: Optional argument, nothing for this 
+    Returns: Numpy array, action"""
+
+    def get_reward(state,action,match_probs):
+        prod_state = 1-state*action*np.array(match_probs)
+        prob_all_inactive = np.prod(prod_state)
+        return (1-prob_all_inactive)*(1-lamb) + np.sum(state)/len(state)*lamb
+        
+    # Hyperparameters + Parameters 
+    
+    value_lr = 1e-4
+    train_epochs = env.train_epochs
+    N = len(state) 
+    match_probs = np.array(env.match_probability_list)[env.agent_idx]
+    epsilon = 0.1
+    target_update_freq = 1
+    batch_size = 256
+    discount = env.discount
+    MAX_REPLAY_SIZE = 2048
+    tau = 0.001
+    
+    # Unpack the memory 
+    if memory == None:
+        past_states = []
+        past_actions = []
+        past_rewards = []
+        past_discounts = []
+        past_next_states = []
+        q_losses = []
+        q_network = MLP(len(state)*2, 128, len(state))
+        criterion = nn.MSELoss()
+        optimizer = optim.Adam(q_network.parameters(), lr=value_lr)
+        target_model = MLP(len(state)*2, 128, len(state))
+        target_model.load_state_dict(q_network.state_dict())
+        target_model = target_model.eval()
+        avg_rewards = []
+        current_epoch = 0
+    else:
+        past_states, past_actions, past_rewards, past_discounts, past_next_states, q_losses, q_network, criterion, optimizer, target_model, current_epoch, avg_rewards = memory
+    
+    while len(past_states) > len(past_next_states):
+        past_next_states.append(list(state)+[0 for i in range(len(state))])
+
+    current_epoch += 1
+
+    if current_epoch < train_epochs:
+         if len(past_states) > batch_size+2:
+            random_memories = random.sample(list(range(len(past_states)-2)),batch_size)
+            sample_state = np.array(past_states)[random_memories]
+            sample_action = np.array(past_actions)[random_memories]
+            action_idx = torch.Tensor(sample_action).long().unsqueeze(1) 
+            sample_reward = np.array(past_rewards)[random_memories]
+            sample_discount = np.array(past_discounts)[random_memories]
+
+            sample_reward = torch.Tensor(sample_reward)
+            sample_state_next = np.array(past_next_states)[np.array(random_memories)]
+
+            current_state_q = q_network(torch.Tensor(torch.Tensor(sample_state)))
+            current_state_value = torch.gather(current_state_q, 1, action_idx)
+            future_state_q = target_model(torch.Tensor(sample_state_next))
+            
+            future_state_value = future_state_q.max(1).values
+            total_current_value = future_state_value * torch.Tensor(sample_discount) + sample_reward 
+
+            loss = criterion(current_state_value.squeeze(),total_current_value)
+            q_losses.append(loss.item())
+            avg_rewards.append(q_network(torch.Tensor([[1 for i in range(len(state))] + [0 for i in range(len(state))]]))[0].detach().numpy())
+
+            optimizer.zero_grad() 
+            loss.backward() 
+            optimizer.step() 
+
+
+
+    # Update the target model
+    if current_epoch < train_epochs and current_epoch % target_update_freq == 0:
+        for target_param, local_param in zip(target_model.parameters(), q_network.parameters()):
+                target_param.data.copy_(tau*local_param.data+(1-tau)*target_param.data)
+    target_model = target_model.eval() 
+    
+    # # Compute the best action
+    final_action = [0 for i in range(len(state))]
+    state = list(state)
+
+    for _ in range(budget):
+        action_values = q_network(torch.Tensor([state+final_action]))[0]
+        played_actions = [i for i in range(len(final_action)) if final_action[i] == 1]
+        unplayed_actions = [i for i in range(len(final_action)) if final_action[i] == 0]
+        for j in played_actions:
+            action_values[j] = float("-inf")
+        max_action = torch.argmax(action_values)
+        # if action_values[max_action] < 0 and past_discou:
+        #     past_discounts.pop()
+        #     past_rewards.pop()  
+        #     break 
+
+        if random.random() < epsilon and current_epoch < train_epochs:
+            action = random.sample(unplayed_actions,1)[0]
+        else:
+            action = max_action.item()
+
+        past_states.append(state + final_action)
+        past_actions.append(action)
+
+        final_action[action] = 1
+    
+    
+    
+    state = np.array(state)
+    action = np.array(final_action)
+    rew = get_reward(state,action,match_probs)
+
+    for i in range(budget):
+        past_rewards.append(rew)
+        past_discounts.append(discount)
+
+    if len(past_states) > MAX_REPLAY_SIZE:
+        past_states = past_states[-MAX_REPLAY_SIZE:]
+        past_actions = past_actions[-MAX_REPLAY_SIZE:]
+        past_rewards = past_rewards[-MAX_REPLAY_SIZE:]
+        past_discounts = past_discounts[-MAX_REPLAY_SIZE:]
+
+
+    # Repack the memory
+    memory = past_states, past_actions, past_rewards, past_discounts, past_next_states, q_losses, q_network, criterion, optimizer, target_model, current_epoch,avg_rewards
 
     return action, memory
 

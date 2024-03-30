@@ -230,8 +230,9 @@ class RMABSimulator(gym.Env):
             if action is None:
                 return 0
             else:
+                # TODO: Change this
                 probs = self.states*action*np.array(self.match_probability_list)[self.agent_idx]
-                return (np.sum(probs)+1)**self.power-1
+                return np.max(probs) # (np.sum(probs)+1)**self.power-1
 
 def random_transition(all_population, n_states, n_actions):
     all_transitions = np.random.random((all_population, n_states, n_actions, n_states))

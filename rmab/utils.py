@@ -60,7 +60,7 @@ def delete_duplicate_results(folder_name,result_name,data):
     
     Side Effects: Deletes .json files from folder_name/result_name..."""
 
-    all_results = glob.glob("../results/{}/{}*.json".format(folder_name,result_name))
+    all_results = glob.glob("../../results/{}/{}*.json".format(folder_name,result_name))
 
     for file_name in all_results:
         load_file = json.load(open(file_name,"r"))

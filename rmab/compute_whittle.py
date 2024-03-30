@@ -116,7 +116,10 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
         return rew
 
     def reward_submodular(s,a):
-        return ((np.sum(match_probability_list*s*a)+1)**power-1)*(1-lamb) + lamb*np.sum(s)/len(s)
+        # TODO: Change this back
+        match_probs = match_probability_list*s*a
+        return np.max(match_probs)*(1-lamb) + lamb*np.sum(s)/len(s)
+        #return ((np.sum(match_probability_list*s*a)+1)**power-1)*(1-lamb) + lamb*np.sum(s)/len(s)
 
     if reward_function == 'activity':
         r = reward_activity

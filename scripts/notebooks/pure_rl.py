@@ -43,28 +43,29 @@ is_jupyter = 'ipykernel' in sys.modules
 # +
 if is_jupyter: 
     seed        = 43
-    n_arms      = 10
-    volunteers_per_arm = 10
-    budget      = 5
+    n_arms      = 2
+    volunteers_per_arm = 2
+    budget      = 1
     discount    = 0.9
     alpha       = 3 
-    n_episodes  = 100
+    n_episodes  = 800
     episode_len = 20 
     n_epochs    = 1 
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
-    lamb = 0.25
+    lamb = 0.5
     prob_distro = 'uniform'
+    policy_lr=5e-3
+    value_lr=1e-4
     train_iterations = 30
     test_iterations = 30
-    out_folder = 'reward_variation'
-    power = 0.5
+    out_folder = 'mcts_exploration/rl_exploration'
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
     parser.add_argument('--volunteers_per_arm',         '-V', help='volunteers per arm', type=int, default=5)
     parser.add_argument('--episode_len',    '-H', help='episode length', type=int, default=20)
-    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=200)
+    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=800)
     parser.add_argument('--budget',         '-B', help='budget', type=int, default=3)
     parser.add_argument('--n_epochs',       '-E', help='number of epochs (num_repeats)', type=int, default=1)
     parser.add_argument('--discount',       '-d', help='discount factor', type=float, default=0.9)
@@ -73,10 +74,11 @@ else:
     parser.add_argument('--seed',           '-s', help='random seed', type=int, default=42)
     parser.add_argument('--prob_distro',           '-p', help='which prob distro [uniform,uniform_small,uniform_large,normal]', type=str, default='uniform')
     parser.add_argument('--time_per_run',      '-t', help='time per MCTS run', type=float, default=.01*1000)
+    parser.add_argument('--policy_lr', help='Learning Rate Policy', type=float, default=5e-3)
+    parser.add_argument('--value_lr', help='Learning Rate Value', type=float, default=1e-4)
     parser.add_argument('--train_iterations', help='Number of MCTS train iterations', type=int, default=30)
     parser.add_argument('--test_iterations', help='Number of MCTS test iterations', type=int, default=30)
-    parser.add_argument('--power', help='Hyperparameter for the type of submodular function', type=float, default=1)
-    parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='reward_variation/max_reward')
+    parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='mcts_exploration/rl_exploration')
 
     parser.add_argument('--use_date', action='store_true')
 
@@ -95,10 +97,11 @@ else:
     save_with_date = args.use_date
     TIME_PER_RUN = args.time_per_run
     prob_distro = args.prob_distro
+    policy_lr = args.policy_lr 
+    value_lr = args.value_lr 
     out_folder = args.out_folder
     train_iterations = args.train_iterations 
     test_iterations = args.test_iterations 
-    power = args.power
 
 save_name = secrets.token_hex(4)  
 # -
@@ -125,11 +128,8 @@ def create_environment(seed):
 
     all_features = np.arange(all_population_size)
     match_probabilities = create_prob_distro(prob_distro,all_population_size*volunteers_per_arm)
-    match_probabilities = [np.random.randint(0,10) for i in range(all_population_size*volunteers_per_arm)]
-    
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
-                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='submodular',match_probability_list=match_probabilities,TIME_PER_RUN=TIME_PER_RUN)
-    simulator.power = power 
+                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='match',match_probability_list=match_probabilities,TIME_PER_RUN=TIME_PER_RUN)
 
     return simulator 
 
@@ -148,6 +148,8 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
         if is_mcts:
             simulator.mcts_train_iterations = train_iterations
             simulator.mcts_test_iterations = test_iterations
+            simulator.policy_lr = policy_lr
+            simulator.value_lr = value_lr
 
         if is_mcts:
             match, active_rate, memory = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=test_length,get_memory=True,per_epoch_function=per_epoch_function)
@@ -178,44 +180,12 @@ results['parameters'] = {'seed'      : seed,
         'lamb': lamb,
         'time_per_run': TIME_PER_RUN, 
         'prob_distro': prob_distro, 
-        'power': power} 
+        'policy_lr': policy_lr, 
+        'value_lr': value_lr} 
 
 # ## Index Policies
 
 seed_list = [seed]
-
-# +
-policy = greedy_policy
-name = "greedy"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
-
-# +
-policy = random_policy
-name = "random"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
-
-# +
-policy = whittle_activity_policy
-name = "engagement_whittle"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
 
 # +
 policy = whittle_policy
@@ -227,33 +197,11 @@ results['{}_match'.format(name)] =  rewards['match']
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
 print(np.mean(rewards['reward']))
-
-# +
-policy = shapley_whittle_submodular_policy 
-name = "shapley_whittle"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
-
-# +
-policy = whittle_greedy_policy
-name = "greedy_whittle"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
 # -
 
 if n_arms * volunteers_per_arm <= 4:
     policy = q_iteration_policy
-    per_epoch_function = q_iteration_submodular_epoch(power)
+    per_epoch_function = q_iteration_epoch
     name = "optimal"
 
     rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function)
@@ -263,6 +211,73 @@ if n_arms * volunteers_per_arm <= 4:
     results['{}_time'.format(name)] =  rewards['time']
     print(np.mean(rewards['reward']))
 
+if n_arms * volunteers_per_arm <= 10:
+    policy = dqn_policy
+    name = "dqn"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+# +
+policy = dqn_with_steps
+name = "dqn_step"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+
+# -
+
+def plot_sliding_window(data):
+    return [np.mean(data[i:i+100]) for i in range(len(data)-100)]
+value_loss_1 = memory[0][5]
+past_rewards = memory[0][2]
+avg_reward = [i[0] for i in memory[0][-1]]
+
+results['avg_reward'] = [float(i) for i in avg_reward]
+
+if is_jupyter:  
+    plt.plot(plot_sliding_window(avg_reward))
+
+if is_jupyter:  
+    plt.plot(plot_sliding_window(value_loss_1))
+
+if is_jupyter:  
+    plt.plot(plot_sliding_window(past_rewards))
+
+if n_arms * volunteers_per_arm <= 4:
+    errors = []
+    value_network = memory[0][6]
+    match_probability = simulator.match_probability_list 
+    if match_probability != []:
+        match_probability = np.array(match_probability)[simulator.agent_idx]
+    true_transitions = simulator.transitions
+    discount = simulator.discount 
+    budget = simulator.budget 
+    Q_vals = arm_value_iteration_exponential(true_transitions,discount,budget,simulator.volunteers_per_arm,
+                    reward_function='combined',lamb=lamb,
+                    match_probability_list=match_probability)
+
+    N = volunteers_per_arm*n_arms 
+    error_max_action = []
+    error_overall = []
+    for s in range(2**(volunteers_per_arm*n_arms)):
+        state = [int(j) for j in bin(s)[2:].zfill(N)]
+        max_q_val = np.max(Q_vals[s])
+        max_action = np.argmax(Q_vals[s])
+        action = [int(j) for j in bin(max_action)[2:].zfill(N)]
+        pred_q_val = torch.max(value_network(torch.Tensor([state+[0 for i in range(len(state))]]))).item()
+        errors.append((pred_q_val-max_q_val))
+    results["q_val_errors"] = [float(i) for i in errors]
+
 # ## Write Data
 
 save_path = get_save_path(out_folder,save_name,seed,use_date=save_with_date)
@@ -270,5 +285,3 @@ save_path = get_save_path(out_folder,save_name,seed,use_date=save_with_date)
 delete_duplicate_results(out_folder,"",results)
 
 json.dump(results,open('../../results/'+save_path,'w'))
-
-

@@ -6,13 +6,20 @@ do
     tmux send-keys -t match_${seed} ENTER 
     tmux send-keys -t match_${seed} "cd ~/projects/food_rescue_rmab/scripts/notebooks" ENTER
 
-    for power in 0.1 0.25 0.5 0.75 1 
+    tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 2 --n_arms 2 --lamb 0.5 --budget 3" ENTER
+    tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 5 --n_arms 2 --lamb 0.5 --budget 3" ENTER
+    tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 2 --n_arms 5 --lamb 0.5 --budget 3" ENTER
+    tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 10 --n_arms 2 --lamb 0.5 --budget 3" ENTER
+    tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 2 --n_arms 10 --lamb 0.5 --budget 3" ENTER
+    tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 10 --n_arms 10 --lamb 0.5 --budget 3" ENTER
+
+    for budget in 5 8 10 
     do 
-        tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 2 --n_arms 2 --lamb 0.5 --budget 3 --prob_distro uniform --power ${power} --out_folder reward_variation" ENTER
-        tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 5 --n_arms 2 --lamb 0.5 --budget 3 --prob_distro uniform --power ${power} --out_folder reward_variation" ENTER
-        tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 2 --n_arms 5 --lamb 0.5 --budget 3 --prob_distro uniform --power ${power} --out_folder reward_variation" ENTER
-        tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 10 --n_arms 2 --lamb 0.5 --budget 3 --prob_distro uniform --power ${power} --out_folder reward_variation" ENTER
-        tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 2 --n_arms 10 --lamb 0.5 --budget 3 --prob_distro uniform --power ${power} --out_folder reward_variation" ENTER
-        tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 10 --n_arms 10 --lamb 0.5 --budget 3 --prob_distro uniform --power ${power} --out_folder reward_variation" ENTER
+        tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 5 --n_arms 2 --lamb 0.5 --budget ${budget}" ENTER
+    done 
+
+    for lamb in 0 0.25 0.75 1 
+    do 
+        tmux send-keys -t match_${seed} "conda activate food; python reward_variation.py --seed ${seed} --volunteers_per_arm 5 --n_arms 2 --lamb ${lamb} --budget 3" ENTER
     done 
 done 
