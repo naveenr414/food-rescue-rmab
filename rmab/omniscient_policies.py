@@ -963,7 +963,6 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
     env.train_epochs = T-test_T
     env.test_epochs = test_T
 
-
     inference_time_taken = 0
     train_time_taken = 0
 
@@ -1035,7 +1034,10 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
     all_rewards = []
     combined_reward = global_reward*(1-lamb) + lamb*active_rate
     num_steps = 1
-    step_size = len(global_reward[0])//num_steps
+
+    # TODO: Change this back
+    # step_size = len(global_reward[0])//num_steps
+    step_size = 4
 
     for epoch in range(len(global_reward)):
         for i in range(num_steps):
