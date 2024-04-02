@@ -780,11 +780,16 @@ def shapley_whittle_policy(env,state,budget,lamb,memory, per_epoch_results):
         memory_shapley = np.array(shapley_index(env,np.ones(len(state)),{})[0])
     else:
         memory_whittle, memory_shapley = memory 
-        
-    state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="activity")
-    state_WI*=lamb 
 
-    state_WI += memory_shapley*(1-lamb)
+    # TODO: Uncomment this
+
+    # state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="activity")
+    # state_WI*=lamb 
+
+    # state_WI += memory_shapley*(1-lamb)
+
+    state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley)
+
 
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
@@ -1036,8 +1041,7 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
     num_steps = 1
 
     # TODO: Change this back
-    # step_size = len(global_reward[0])//num_steps
-    step_size = 4
+    step_size = len(global_reward[0])//num_steps
 
     for epoch in range(len(global_reward)):
         for i in range(num_steps):

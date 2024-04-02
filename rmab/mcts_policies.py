@@ -508,7 +508,7 @@ def get_reward(state,action,match_probs,lamb):
     return (1-prob_all_inactive)*(1-lamb) + np.sum(state)/len(state)*lamb
 
 
-def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=False):
     """Use a DQN policy to compute the action values
     
     Arguments: 
@@ -522,16 +522,16 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
 
     # Hyperparameters + Parameters 
     
-    value_lr = 5e-5
+    value_lr = 5e-4
     train_epochs = env.train_epochs
     N = len(state) 
     match_probs = np.array(env.match_probability_list)[env.agent_idx]
     epsilon = 0.05
     target_update_freq = 1
-    batch_size = 128
+    batch_size = 16
     discount = env.discount
     MAX_REPLAY_SIZE = 512
-    tau = 0.001
+    tau = 0.01
     valid_actions = []
     action_to_idx = {}
     for action_num in range(2**(N)):
@@ -549,6 +549,10 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
         q_network = MLP(len(state), 128, len(valid_actions))
         criterion = nn.MSELoss()
         optimizer = optim.Adam(q_network.parameters(), lr=value_lr)
+
+        # TODO: Remove this 
+        q_network.fc3.bias = torch.nn.Parameter(torch.Tensor([5 for i in range(len(q_network.fc3.bias))]))
+
         target_model = MLP(len(state), 128, len(valid_actions))
         target_model.load_state_dict(q_network.state_dict())
         target_model = target_model.eval()
@@ -576,9 +580,43 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
             action_idx = action_idx.unsqueeze(1)
             current_state_value = torch.gather(current_state_q, 1, action_idx)
 
-            future_state_q = target_model(torch.Tensor(sample_state_next))
-            future_state_value = future_state_q.max(1).values
-            total_current_value = future_state_value * discount + sample_reward 
+            if not stabilization:
+                future_state_q = target_model(torch.Tensor(sample_state_next))
+                future_state_value = future_state_q.max(1).values
+                total_current_value = future_state_value * discount + sample_reward 
+            else:
+                total_current_value = sample_reward
+                future_values = np.zeros(len(sample_state))
+
+                all_future_states = []
+                corresponding_nums = []
+                corresponding_nums_set = set()
+
+                for i in range(2**N//4):
+                    rand_num = random.randint(0,2**N-1)
+                    while rand_num in corresponding_nums_set:
+                        rand_num = random.randint(0,2**N-1)
+                    corresponding_nums_set.add(rand_num)
+
+                    next_state = [int(j) for j in bin(rand_num)[2:].zfill(N)]
+                    all_future_states.append(next_state)
+                    corresponding_nums.append(rand_num)
+                future_state_q = target_model(torch.Tensor(torch.Tensor(all_future_states)))
+                future_state_value = future_state_q.max(1).values 
+                
+                for s in range(len(sample_state)):
+                    all_probs = 0 
+                    temp_sum = 0
+                    for idx in range(len(corresponding_nums)):
+                        next_state = all_future_states[idx]
+                        prob = 1 
+                        for j in range(N):
+                            prob *= env.transitions[j//env.volunteers_per_arm, sample_state[s][j], sample_action[s][j].item(), next_state[j]]
+
+                        all_probs += prob 
+                        temp_sum += future_state_value[idx] * discount*prob  
+                    future_values[s]  += temp_sum/all_probs 
+                total_current_value += torch.Tensor(future_values)
 
             loss = criterion(current_state_value.squeeze(),total_current_value)
             q_losses.append(loss.item())
@@ -621,7 +659,13 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
 
     return action, memory
 
-def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+def dqn_stable_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    return dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True)
+
+def dqn_with_stablization_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    return dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True)
+
+def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=False):
     """Use a DQN policy to compute the action values
     
     Arguments: 
@@ -683,10 +727,49 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
 
             current_state_q = q_network(torch.Tensor(torch.Tensor(sample_state)))
             current_state_value = torch.gather(current_state_q, 1, action_idx)
-            future_state_q = target_model(torch.Tensor(sample_state_next))
             
-            future_state_value = future_state_q.max(1).values
-            total_current_value = future_state_value * torch.Tensor(sample_discount) + sample_reward 
+            if not stabilization:
+                future_state_q = target_model(torch.Tensor(sample_state_next))
+                future_state_value = future_state_q.max(1).values
+                total_current_value = future_state_value * discount + sample_reward 
+            else:
+                total_current_value = sample_reward
+                future_values = np.zeros(len(sample_state))
+
+                all_future_states = []
+                corresponding_nums = []
+                corresponding_nums_set = set()
+
+                for i in range(2**N//4):
+                    rand_num = random.randint(0,2**N-1)
+                    while rand_num in corresponding_nums_set:
+                        rand_num = random.randint(0,2**N-1)
+                    corresponding_nums_set.add(rand_num)
+
+                    next_state = [int(j) for j in bin(rand_num)[2:].zfill(N)]
+                    all_future_states.append(next_state + [0 for i in range(N)])
+                    corresponding_nums.append(rand_num)
+                future_state_q = target_model(torch.Tensor(torch.Tensor(all_future_states)))
+                future_state_value = future_state_q.max(1).values 
+                
+                for s in range(len(sample_state)):
+                    all_probs = 0 
+                    temp_sum = 0
+                    for idx in range(len(corresponding_nums)):
+                        next_state = all_future_states[idx][:N]
+                        real_sample_state = deepcopy(sample_state[s])
+                        real_sample_state[sample_action[s]] = 1
+                        real_sample_action = real_sample_state[N:]
+                        real_sample_state = real_sample_state[:N]
+
+                        prob = 1 
+                        for j in range(N):
+                            prob *= env.transitions[j//env.volunteers_per_arm, real_sample_state[j], real_sample_action[j].item(), next_state[j]]
+
+                        all_probs += prob 
+                        temp_sum += future_state_value[idx] * discount*prob  
+                    future_values[s]  += temp_sum/all_probs 
+                total_current_value += torch.Tensor(future_values)
 
             loss = criterion(current_state_value.squeeze(),total_current_value)
             q_losses.append(loss.item())
@@ -771,8 +854,12 @@ class MonteCarloTreeSearchNode():
         return self._untried_actions
 
     def q(self):
-        return np.sum(self._results)
-    
+        rewards = np.array([i[0] for i in self._results])
+        probs = np.array([i[1] for i in self._results])
+        probs /= np.sum(probs)
+        return float(np.sum(rewards * probs))*len(rewards)
+        # return np.sum(rewards)    
+
     def n(self):
         return self._number_of_visits
 
@@ -836,8 +923,7 @@ class MonteCarloTreeSearchNode():
             v = self._tree_policy()
             reward = v.rollout()
             v.backpropagate(reward)
-        choices_weights = [(c.q() / c.n(),c.q(),c.n()) + 0 * np.sqrt((2 * np.log(self.n()) / c.n())) for c in self.children]
-
+        choices_weights = [(c.q() / c.n(),c.n()) + 0 * np.sqrt((2 * np.log(self.n()) / c.n())) for c in self.children]
         return self.best_child(c_param=0.)
     
     def __str__(self):
@@ -870,6 +956,9 @@ class StateAction():
     
     def game_result(self):
         total_reward = 0
+        last_state = []
+        last_action = []
+        prob = 1 
 
         for i in range(self.max_rollout_actions//self.budget):
             state_choices = self.previous_state_actions[i*self.budget:(i+1)*self.budget]
@@ -883,8 +972,13 @@ class StateAction():
                     action_0_1.append(0)
             action_0_1 = np.array(action_0_1)
             total_reward += self.discount**i * get_reward(corresponding_state,action_0_1,self.match_probs,self.lamb)
-        
-        return total_reward 
+            if last_state != []:
+                for i in range(len(last_state)):
+                    prob *= self.env.transitions[i//self.env.volunteers_per_arm][last_state[i]][last_action[i]][corresponding_state[i]]
+            last_state = corresponding_state
+            last_action = action_0_1
+
+        return (total_reward,prob)
     
     def move(initial_state,action,transitions):
         previous_state_actions = deepcopy(initial_state.previous_state_actions)

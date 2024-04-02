@@ -65,7 +65,7 @@ else:
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
     parser.add_argument('--volunteers_per_arm',         '-V', help='volunteers per arm', type=int, default=5)
     parser.add_argument('--episode_len',    '-H', help='episode length', type=int, default=20)
-    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=200)
+    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=1)
     parser.add_argument('--budget',         '-B', help='budget', type=int, default=3)
     parser.add_argument('--n_epochs',       '-E', help='number of epochs (num_repeats)', type=int, default=3)
     parser.add_argument('--discount',       '-d', help='discount factor', type=float, default=0.9)
@@ -185,7 +185,7 @@ results['parameters'] = {'seed'      : seed,
 
 # ## Index Policies
 
-seed_list = [43]
+seed_list = [seed]
 
 # +
 policy = whittle_policy
@@ -204,7 +204,7 @@ if n_arms * volunteers_per_arm <= 4:
     per_epoch_function = q_iteration_epoch
     name = "optimal"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function,test_length=20,test_iterations=100)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
@@ -215,7 +215,7 @@ if n_arms * volunteers_per_arm <= 4:
 policy = mcts_policy
 name = "mcts"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=20,is_mcts=True,test_iterations=500)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=20,is_mcts=True,test_iterations=100)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -224,10 +224,10 @@ print(np.mean(rewards['reward']))
 
 # +
 reward_by_iterations = {}
-reward_by_iterations[500] = rewards['reward']
+reward_by_iterations[100] = rewards['reward']
 policy = mcts_policy
 
-for test_iterations in [50,100,250,500,1000]:
+for test_iterations in [50,150,250]:
     rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=20,is_mcts=True,test_iterations=test_iterations)
     reward_by_iterations[test_iterations] = rewards['reward']
 results["mcts_test_iterations"] = reward_by_iterations
@@ -236,7 +236,7 @@ results["mcts_test_iterations"] = reward_by_iterations
 policy = mcts_whittle_policy
 name = "mcts_whittle"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=20,is_mcts=True,test_iterations=500)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=20,is_mcts=True,test_iterations=100)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -245,12 +245,12 @@ print(np.mean(rewards['reward']))
 
 # +
 reward_by_iterations_whittle = {}
-reward_by_iterations_whittle[500] = rewards['reward']
+reward_by_iterations_whittle[100] = rewards['reward']
 policy = mcts_whittle_policy
 name = "mcts_whittle"
 
-for test_iterations in [50,100,250,1000]:
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=100,is_mcts=True,test_iterations=test_iterations)
+for test_iterations in [50,150,250]:
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=20,is_mcts=True,test_iterations=test_iterations)
     reward_by_iterations_whittle[test_iterations] = rewards['reward']
 results["mcts_whittle_test_iterations"] = reward_by_iterations_whittle
 # -
