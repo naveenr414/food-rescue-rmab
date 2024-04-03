@@ -14,9 +14,9 @@ import gc
 import time
 from sklearn.cluster import KMeans
 import torch.nn.functional as F
-import torch.optim.lr_scheduler as lr_scheduler
 from collections import defaultdict 
 import math 
+import torch.optim.lr_scheduler as lr_scheduler
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size,use_sigmoid=False):
@@ -527,7 +527,7 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
     train_epochs = env.train_epochs
     N = len(state) 
     match_probs = np.array(env.match_probability_list)[env.agent_idx]
-    epsilon = 0.05
+    epsilon = 0.01
     target_update_freq = 1
     batch_size = 16
     discount = env.discount
@@ -546,11 +546,11 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
         past_states = []
         past_actions = []
         past_rewards = []
+        past_probs = []
         q_losses = []
         q_network = MLP(len(state), 128, len(valid_actions))
         criterion = nn.MSELoss()
         optimizer = optim.Adam(q_network.parameters(), lr=value_lr)
-
         # TODO: Remove this 
         q_network.fc3.bias = torch.nn.Parameter(torch.Tensor([round(env.avg_reward) for i in range(len(q_network.fc3.bias))]))
         target_model = MLP(len(state), 128, len(valid_actions))
@@ -558,9 +558,22 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
         target_model = target_model.eval()
         avg_rewards = []
         current_epoch = 0
-        scheduler = lr_scheduler.StepLR(optimizer, step_size=10000, gamma=0.01)
+        all_future_states = []
+        corresponding_nums = []
+        corresponding_nums_set = set()
+
+        if stabilization:
+            for i in range(min(128,2**N)):
+                rand_num = random.randint(0,2**N-1)
+                while rand_num in corresponding_nums_set:
+                    rand_num = random.randint(0,2**N-1)
+                corresponding_nums_set.add(rand_num)
+                next_state = [int(j) for j in bin(rand_num)[2:].zfill(N)]
+                all_future_states.append(next_state)
+                corresponding_nums.append(rand_num)
+
     else:
-        past_states, past_actions, past_rewards, q_losses, q_network, criterion, optimizer, scheduler, target_model, current_epoch, avg_rewards = memory
+        past_states, past_actions, past_rewards, past_probs, q_losses, q_network, criterion, optimizer, target_model, current_epoch, all_future_states, corresponding_nums, avg_rewards = memory
     
 
     current_epoch += 1
@@ -571,6 +584,7 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
             random_memories = random.sample(list(range(len(past_states)-2)),batch_size)
             sample_state = np.array(past_states)[random_memories]
             sample_action = np.array(past_actions)[random_memories]
+            sample_probs = np.array(past_probs)[random_memories]
             action_idx = np.array([action_to_idx[''.join([str(j) for j in i])] for i in sample_action])
             action_idx = torch.Tensor(action_idx).long()
             sample_reward = np.array(past_rewards)[random_memories]
@@ -586,46 +600,14 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
                 future_state_value = future_state_q.max(1).values
                 total_current_value = future_state_value * discount + sample_reward 
             else:
-                total_current_value = sample_reward
-                future_values = np.zeros(len(sample_state))
-
-                all_future_states = []
-                corresponding_nums = []
-                corresponding_nums_set = set()
-
-                for i in range(min(32,2**N)):
-                    rand_num = random.randint(0,2**N-1)
-                    while rand_num in corresponding_nums_set:
-                        rand_num = random.randint(0,2**N-1)
-                    corresponding_nums_set.add(rand_num)
-
-                    next_state = [int(j) for j in bin(rand_num)[2:].zfill(N)]
-                    all_future_states.append(next_state)
-                    corresponding_nums.append(rand_num)
                 future_state_q = target_model(torch.Tensor(torch.Tensor(all_future_states)))
-                print("Generation took {} time".format(time.time()-start))
+                future_state_value = future_state_q.max(1).values.float()
 
-                max_time = time.time()
-                future_state_value = future_state_q.max(1).values 
-                print("Taking max took {} time".format(time.time()-max_time))
+                prob_list = torch.Tensor(sample_probs)
+                discounted_future_values = torch.matmul(future_state_value, discount * prob_list.T.float())
+                future_values = discounted_future_values / torch.sum(prob_list, dim=1)
 
-                start = time.time()
-                all_probs_list = []
-                for s in range(len(sample_state)):
-                    all_probs = 0 
-                    temp_sum = 0
-                    for idx in range(len(corresponding_nums)):
-                        next_state = all_future_states[idx]
-                        prob = 1 
-                        for j in range(N):
-                            prob *= env.transitions[j//env.volunteers_per_arm, sample_state[s][j], sample_action[s][j].item(), next_state[j]]
-
-                        all_probs += prob 
-                        temp_sum += future_state_value[idx] * discount*prob  
-                    all_probs_list.append(all_probs)
-                    future_values[s]  += temp_sum/all_probs 
-                total_current_value += torch.Tensor(future_values)
-                print("Sampling took {} time".format(time.time))
+                total_current_value = sample_reward + future_values
 
             loss = criterion(current_state_value.squeeze(),total_current_value)
             q_losses.append(loss.item())
@@ -635,8 +617,6 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
             optimizer.zero_grad() 
             loss.backward() 
             optimizer.step() 
-            scheduler.step()
-
 
 
     # Update the target model
@@ -655,17 +635,31 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
     else:
         action = max_action
     
-    if len(past_states) > MAX_REPLAY_SIZE:
-        past_states = past_states[-MAX_REPLAY_SIZE:]
-        past_actions = past_actions[-MAX_REPLAY_SIZE:]
-        past_rewards = past_rewards[-MAX_REPLAY_SIZE:]
 
     past_states.append(state)
     past_actions.append(action)
     past_rewards.append(get_reward(state,action,match_probs,lamb))
 
+    temp_list = []
+    if stabilization:
+        for idx in range(len(corresponding_nums)):
+            next_state = all_future_states[idx]
+            prob = 1 
+            for j in range(N):
+                prob *= env.transitions[j//env.volunteers_per_arm, state[j], action[j], next_state[j]]
+            temp_list.append(prob)
+
+    past_probs.append(temp_list)
+
+
+    if len(past_states) > MAX_REPLAY_SIZE:
+        past_states = past_states[-MAX_REPLAY_SIZE:]
+        past_actions = past_actions[-MAX_REPLAY_SIZE:]
+        past_rewards = past_rewards[-MAX_REPLAY_SIZE:]
+        past_probs = past_probs[-MAX_REPLAY_SIZE:]
+
     # Repack the memory
-    memory = past_states, past_actions, past_rewards, q_losses, q_network, criterion, optimizer, scheduler, target_model, current_epoch,avg_rewards
+    memory = past_states, past_actions, past_rewards, past_probs, q_losses, q_network, criterion, optimizer, target_model, current_epoch, all_future_states, corresponding_nums, avg_rewards
 
     return action, memory
 
@@ -692,7 +686,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     train_epochs = env.train_epochs
     N = len(state) 
     match_probs = np.array(env.match_probability_list)[env.agent_idx]
-    epsilon = 0.05
+    epsilon = 0.01
     target_update_freq = 1
     batch_size = 16
     discount = env.discount
@@ -705,10 +699,11 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
         past_actions = []
         past_final_actions = []
         past_rewards = []
-        past_discounts = []
+        past_probs = []
         past_next_states = []
         q_losses = []
         q_network = MLP(len(state)*2, 128, len(state))
+        q_network.fc3.bias = torch.nn.Parameter(torch.Tensor([round(env.avg_reward) for i in range(len(q_network.fc3.bias))]))
         criterion = nn.MSELoss()
         optimizer = optim.Adam(q_network.parameters(), lr=value_lr)
         target_model = MLP(len(state)*2, 128, len(state))
@@ -716,8 +711,24 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
         target_model = target_model.eval()
         avg_rewards = []
         current_epoch = 0
+
+        all_future_states = []
+        corresponding_nums = []
+        corresponding_nums_set = set()
+        if stabilization: 
+            for i in range(min(256,2**N)):
+                rand_num = random.randint(0,2**N-1)
+                while rand_num in corresponding_nums_set:
+                    rand_num = random.randint(0,2**N-1)
+                corresponding_nums_set.add(rand_num)
+                next_state = [int(j) for j in bin(rand_num)[2:].zfill(N)]
+                all_future_states.append(next_state + [0 for i in range(N)])
+                corresponding_nums.append(rand_num)
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=10000, gamma=0.01)
+
+
     else:
-        past_states, past_actions, past_final_actions, past_rewards, past_discounts, past_next_states, q_losses, q_network, criterion, optimizer, target_model, current_epoch, avg_rewards = memory
+        past_states, past_actions, past_final_actions, past_rewards, past_probs, past_next_states, q_losses, q_network, criterion, optimizer, target_model, current_epoch, all_future_states, corresponding_nums,scheduler,  avg_rewards = memory
     
     while len(past_states) > len(past_next_states):
         past_next_states.append(list(state)+[0 for i in range(len(state))])
@@ -733,6 +744,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
             sample_final_action = np.array(past_final_actions)[random_memories]
             action_idx = torch.Tensor(sample_action).long().unsqueeze(1) 
             sample_reward = np.array(past_rewards)[random_memories]
+            sample_probs = np.array(past_probs)[random_memories]
 
             sample_reward = torch.Tensor(sample_reward)
             sample_state_next = np.array(past_next_states)[np.array(random_memories)]
@@ -745,51 +757,16 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
                 future_state_value = future_state_q.max(1).values
                 total_current_value = future_state_value * discount + sample_reward 
             else:
-                generation_time = time.time()
                 total_current_value = sample_reward
-                future_values = np.zeros(len(sample_state))
-
-                all_future_states = []
-                corresponding_nums = []
-                corresponding_nums_set = set()
-
-                for i in range(min(2**N//2,32)):
-                    rand_num = random.randint(0,2**N-1)
-                    while rand_num in corresponding_nums_set:
-                        rand_num = random.randint(0,2**N-1)
-                    corresponding_nums_set.add(rand_num)
-
-                    next_state = [int(j) for j in bin(rand_num)[2:].zfill(N)]
-                    all_future_states.append(next_state + [0 for i in range(N)])
-                    corresponding_nums.append(rand_num)
+                future_values = torch.zeros(len(sample_state))
                 future_state_q = target_model(torch.Tensor(torch.Tensor(all_future_states)))
-                print("Generation took {} time".format(time.time()-start))
                 
-                max_time = time.time()
-                future_state_value = future_state_q.max(1).values 
-                print("Taking max took {} time".format(time.time()-max_time))
-                
-                ticks = 0
-                sampling_time = time.time()
-                for s in range(len(sample_state)):
-                    all_probs = 0 
-                    temp_sum = 0
-                    for idx in range(len(corresponding_nums)):
-                        next_state = all_future_states[idx][:N]
-                        real_sample_state = sample_state[s][:N]
-                        real_sample_action = sample_final_action[s]
+                future_state_value = future_state_q.max(1).values                 
+                prob_list = torch.Tensor(sample_probs)
+                discounted_future_values = torch.matmul(future_state_value, discount * prob_list.T.float())
+                future_values += discounted_future_values / torch.sum(prob_list, dim=1)
 
-                        prob = 1 
-                        for j in range(N):
-                            prob *= env.transitions[j//env.volunteers_per_arm, real_sample_state[j], real_sample_action[j].item(), next_state[j]]
-                            ticks += 1
-
-                        all_probs += prob 
-                        temp_sum += future_state_value[idx] * discount*prob  
-                    future_values[s]  += temp_sum/all_probs 
-                total_current_value += torch.Tensor(future_values)
-                print("Sampling took {} time".format(time.time()-sampling_time))
-                print("Took {} ticks".format(ticks))
+                total_current_value += future_values
 
             loss = criterion(current_state_value.squeeze(),total_current_value)
             q_losses.append(loss.item())
@@ -798,8 +775,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
             optimizer.zero_grad() 
             loss.backward() 
             optimizer.step() 
-            print("Took {} time for training".format(time.time()-start))
-
+            scheduler.step()
 
     start = time.time() 
     # Update the target model
@@ -840,19 +816,29 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
 
     for i in range(budget):
         past_rewards.append(rew)
-        past_discounts.append(discount)
+
+    temp_list = []
+    if stabilization: 
+        for idx in range(len(corresponding_nums)):
+            next_state = all_future_states[idx]
+            prob = 1 
+            for j in range(N):
+                prob *= env.transitions[j//env.volunteers_per_arm, state[j], action[j], next_state[j]]
+            temp_list.append(prob)
+    
+    for _ in range(budget):
+        past_probs.append(temp_list)
+
 
     if len(past_states) > MAX_REPLAY_SIZE:
         past_states = past_states[-MAX_REPLAY_SIZE:]
         past_actions = past_actions[-MAX_REPLAY_SIZE:]
         past_final_actions = past_final_actions[-MAX_REPLAY_SIZE:]
         past_rewards = past_rewards[-MAX_REPLAY_SIZE:]
-        past_discounts = past_discounts[-MAX_REPLAY_SIZE:]
-    print("Took {} time for evaluation".format(time.time()-start))
-
+        past_probs = past_probs[-MAX_REPLAY_SIZE:]
 
     # Repack the memory
-    memory = past_states, past_actions, past_final_actions, past_rewards, past_discounts, past_next_states, q_losses, q_network, criterion, optimizer, target_model, current_epoch,avg_rewards
+    memory = past_states, past_actions, past_final_actions, past_rewards, past_probs, past_next_states, q_losses, q_network, criterion, optimizer, target_model, current_epoch, all_future_states, corresponding_nums,scheduler,  avg_rewards
 
     return action, memory
 
