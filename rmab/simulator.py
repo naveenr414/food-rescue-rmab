@@ -56,6 +56,7 @@ class RMABSimulator(gym.Env):
         self.test_epochs = 0
         self.train_epochs = 0
         self.power = None # For the submodular runs 
+        self.avg_reward = 5
 
         self.match_probability_list = np.array(self.match_probability_list)
 

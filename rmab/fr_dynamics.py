@@ -67,7 +67,7 @@ def get_all_transitions(population_size):
 
     transitions = []
 
-    for i in range(1,population_size+1):
+    for i in range(3,population_size+1):
         transitions.append(get_transitions(data_by_user,i))
     
     return np.array(transitions)

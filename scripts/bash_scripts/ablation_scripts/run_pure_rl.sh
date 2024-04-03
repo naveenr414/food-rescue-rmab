@@ -7,11 +7,9 @@ do
     tmux send-keys -t match_${seed} "cd ~/projects/food_rescue_rmab/scripts/notebooks" ENTER
 
     tmux send-keys -t match_${seed} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 2 --n_arms 2 --lamb 0.5 --budget 3" ENTER
+    tmux send-keys -t match_${seed} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 3 --n_arms 2 --lamb 0.5 --budget 3" ENTER
     tmux send-keys -t match_${seed} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 5 --n_arms 2 --lamb 0.5 --budget 3" ENTER
     tmux send-keys -t match_${seed} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 2 --n_arms 5 --lamb 0.5 --budget 3" ENTER
-    tmux send-keys -t match_${seed} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 10 --n_arms 2 --lamb 0.5 --budget 3" ENTER
-    tmux send-keys -t match_${seed} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 2 --n_arms 10 --lamb 0.5 --budget 3" ENTER
-    tmux send-keys -t match_${seed} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 10 --n_arms 10 --lamb 0.5 --budget 3" ENTER
 
     for budget in 5 8 10 
     do 

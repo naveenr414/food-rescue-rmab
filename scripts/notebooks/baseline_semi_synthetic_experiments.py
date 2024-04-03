@@ -30,7 +30,7 @@ import secrets
 from rmab.simulator import RMABSimulator
 from rmab.omniscient_policies import *
 from rmab.fr_dynamics import get_all_transitions
-from rmab.mcts_policies import full_mcts_policy, get_policy_network_input
+from rmab.mcts_policies import full_mcts_policy
 from rmab.utils import get_save_path, delete_duplicate_results, create_prob_distro
 import resource
 
@@ -43,9 +43,9 @@ is_jupyter = 'ipykernel' in sys.modules
 # +
 if is_jupyter: 
     seed        = 42
-    n_arms      = 2
-    volunteers_per_arm = 5
-    budget      = 3
+    n_arms      = 5
+    volunteers_per_arm = 2
+    budget      = 2
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 100
@@ -53,7 +53,7 @@ if is_jupyter:
     n_epochs    = 1 
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
-    lamb = 0.5
+    lamb = 0
     prob_distro = 'uniform'
     policy_lr=5e-3
     value_lr=1e-4
@@ -294,6 +294,4 @@ save_path = get_save_path(out_folder,save_name,seed,use_date=save_with_date)
 
 delete_duplicate_results(out_folder,"",results)
 
-json.dump(results,open('../results/'+save_path,'w'))
-
-
+json.dump(results,open('../../results/'+save_path,'w'))

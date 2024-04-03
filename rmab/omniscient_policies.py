@@ -167,11 +167,11 @@ def shapley_index_submodular(env,state,memoizer_shapley = {}):
         ones_indices = random.sample(list(range(len(corresponding_probabilities))),k)
         combinations[i, ones_indices] = 1
 
-    scores = [np.sum(corresponding_probabilities[combo == 1]+1)**power-1 for combo in combinations]
+    scores = [np.max(corresponding_probabilities[combo == 1],initial=0) for combo in combinations]
     scores = np.array(scores)
 
     for i in range(len(state_1)):
-        shapley_indices[state_1[i]] = np.mean([np.sum(corresponding_probabilities[combo == 1]+match_probabilities[i]+1)**power - scores[j] for j,combo in enumerate(combinations)])
+        shapley_indices[state_1[i]] = np.mean([max(np.max(corresponding_probabilities[combo == 1],initial=0),match_probabilities[i]) - scores[j] for j,combo in enumerate(combinations)])
 
     memoizer_shapley[state_str] = shapley_indices
 
@@ -818,11 +818,14 @@ def shapley_whittle_submodular_policy(env,state,budget,lamb,memory, per_epoch_re
         memory_shapley = np.array(shapley_index_submodular(env,np.ones(len(state)),{})[0])
     else:
         memory_whittle, memory_shapley = memory 
-        
-    state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="activity")
-    state_WI*=lamb 
 
-    state_WI += memory_shapley*(1-lamb)
+    # TODO: Uncomment this
+    # state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="activity")
+    # state_WI*=lamb 
+
+    # state_WI += memory_shapley*(1-lamb)
+
+    state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley)
 
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)

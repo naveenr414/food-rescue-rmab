@@ -42,13 +42,13 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 43
+    seed        = 44
     n_arms      = 2
     volunteers_per_arm = 2
-    budget      = 1
+    budget      = 3
     discount    = 0.9
     alpha       = 3 
-    n_episodes  = 800
+    n_episodes  = 525
     episode_len = 20 
     n_epochs    = 1 
     save_with_date = False 
@@ -65,7 +65,7 @@ else:
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
     parser.add_argument('--volunteers_per_arm',         '-V', help='volunteers per arm', type=int, default=5)
     parser.add_argument('--episode_len',    '-H', help='episode length', type=int, default=20)
-    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=800)
+    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=525)
     parser.add_argument('--budget',         '-B', help='budget', type=int, default=3)
     parser.add_argument('--n_epochs',       '-E', help='number of epochs (num_repeats)', type=int, default=1)
     parser.add_argument('--discount',       '-d', help='discount factor', type=float, default=0.9)
@@ -109,7 +109,7 @@ save_name = secrets.token_hex(4)
 n_states = 2
 n_actions = 2
 
-all_population_size = 100 # number of random arms to generate
+all_population_size = 98 # number of random arms to generate
 all_transitions = get_all_transitions(all_population_size)
 
 
@@ -134,7 +134,7 @@ def create_environment(seed):
     return simulator 
 
 
-def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_iterations=0,test_iterations=0,test_length=500):
+def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_iterations=0,test_iterations=0,test_length=500,avg_reward=5):
     memories = []
     scores = {
         'reward': [],
@@ -150,6 +150,7 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
             simulator.mcts_test_iterations = test_iterations
             simulator.policy_lr = policy_lr
             simulator.value_lr = value_lr
+            simulator.avg_reward = avg_reward
 
         if is_mcts:
             match, active_rate, memory = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=test_length,get_memory=True,per_epoch_function=per_epoch_function)
@@ -214,8 +215,21 @@ if n_arms * volunteers_per_arm <= 4:
 if n_arms * volunteers_per_arm <= 10:
     policy = dqn_policy
     name = "dqn"
+    print("Running DQN")
 
     rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 10:
+    policy = dqn_stable_policy
+    name = "dqn_stable"
+    print("Running DQN Stable")
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,avg_reward=np.mean(results['linear_whittle_reward'][0]))
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
@@ -226,6 +240,8 @@ if n_arms * volunteers_per_arm <= 10:
 policy = dqn_with_steps
 name = "dqn_step"
 
+print("Running DQN Step")
+
 rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
@@ -233,16 +249,26 @@ results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
 print(np.mean(rewards['reward']))
 
+# +
+policy = dqn_with_stablization_steps
+name = "dqn_stable_step"
 
+print("Running DQN Step")
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
 # -
 
-def plot_sliding_window(data):
-    return [np.mean(data[i:i+100]) for i in range(len(data)-100)]
-value_loss_1 = memory[0][5]
-past_rewards = memory[0][2]
-avg_reward = [i[0] for i in memory[0][-1]]
-
-results['avg_reward'] = [float(i) for i in avg_reward]
+if is_jupyter:
+    def plot_sliding_window(data):
+        return [np.mean(data[i:i+100]) for i in range(len(data)-100)]
+    value_loss_1 = memory[0][6] # memory[0][5]
+    past_rewards = memory[0][3] # memory[0][2]
+    avg_reward = [i for i in memory[0][-1]]
 
 if is_jupyter:  
     plt.plot(plot_sliding_window(avg_reward))
@@ -250,12 +276,10 @@ if is_jupyter:
 if is_jupyter:  
     plt.plot(plot_sliding_window(value_loss_1))
 
-if is_jupyter:  
-    plt.plot(plot_sliding_window(past_rewards))
-
-if n_arms * volunteers_per_arm <= 4:
+if n_arms * volunteers_per_arm <= 4 and is_jupyter:
     errors = []
-    value_network = memory[0][6]
+    value_network = memory[-1][4]
+
     match_probability = simulator.match_probability_list 
     if match_probability != []:
         match_probability = np.array(match_probability)[simulator.agent_idx]
@@ -274,7 +298,7 @@ if n_arms * volunteers_per_arm <= 4:
         max_q_val = np.max(Q_vals[s])
         max_action = np.argmax(Q_vals[s])
         action = [int(j) for j in bin(max_action)[2:].zfill(N)]
-        pred_q_val = torch.max(value_network(torch.Tensor([state+[0 for i in range(len(state))]]))).item()
+        pred_q_val = torch.max(value_network(torch.Tensor([state]))).item()
         errors.append((pred_q_val-max_q_val))
     results["q_val_errors"] = [float(i) for i in errors]
 
@@ -285,3 +309,5 @@ save_path = get_save_path(out_folder,save_name,seed,use_date=save_with_date)
 delete_duplicate_results(out_folder,"",results)
 
 json.dump(results,open('../../results/'+save_path,'w'))
+
+
