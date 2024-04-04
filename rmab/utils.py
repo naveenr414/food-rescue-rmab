@@ -64,11 +64,15 @@ def delete_duplicate_results(folder_name,result_name,data):
 
     for file_name in all_results:
         load_file = json.load(open(file_name,"r"))
+
+        if "fce71a1c_43.json" in file_name:
+            print(load_file['parameters'],data['parameters'])
         if 'parameters' in load_file and load_file['parameters'] == data['parameters']:
-            try:
-                os.remove(file_name)
-            except OSError as e:
-                print(f"Error deleting {file_name}: {e}")
+            print("File name {}".format(file_name))
+            # try:
+            #     os.remove(file_name)
+            # except OSError as e:
+            #     print(f"Error deleting {file_name}: {e}")
 
 def get_results_matching_parameters(folder_name,result_name,parameters):
     """Get a list of dictionaries, with data, which match some set of parameters

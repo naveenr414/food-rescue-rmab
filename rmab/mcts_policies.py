@@ -508,6 +508,11 @@ def get_reward(state,action,match_probs,lamb):
     prob_all_inactive = np.prod(prod_state)
     return (1-prob_all_inactive)*(1-lamb) + np.sum(state)/len(state)*lamb
 
+def get_reward_max(state,action,match_probs,lamb):
+    prod_state = state*action*np.array(match_probs)
+    score = np.max(prod_state)
+    return score*(1-lamb) + np.sum(state)/len(state)*lamb
+
 
 def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=False):
     """Use a DQN policy to compute the action values
@@ -669,7 +674,13 @@ def dqn_stable_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup
 def dqn_with_stablization_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
     return dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True)
 
-def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=False):
+def dqn_max_with_stablization_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    return dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True,use_max=True)
+
+def dqn_max_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    return dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",use_max=True)
+
+def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=False,use_max=False):
     """Use a DQN policy to compute the action values
     
     Arguments: 
@@ -682,7 +693,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     Returns: Numpy array, action"""        
     # Hyperparameters + Parameters 
     
-    value_lr = 5e-4
+    value_lr = env.value_lr 
     train_epochs = env.train_epochs
     N = len(state) 
     match_probs = np.array(env.match_probability_list)[env.agent_idx]
@@ -716,7 +727,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
         corresponding_nums = []
         corresponding_nums_set = set()
         if stabilization: 
-            for i in range(min(256,2**N)):
+            for i in range(min(env.num_samples,2**N)):
                 rand_num = random.randint(0,2**N-1)
                 while rand_num in corresponding_nums_set:
                     rand_num = random.randint(0,2**N-1)
@@ -812,7 +823,10 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     for _ in range(budget):
         past_final_actions.append(final_action)
 
-    rew = get_reward(state,action,match_probs,lamb)
+    if use_max:
+        rew = get_reward_max(state,action,match_probs,lamb)
+    else:
+        rew = get_reward(state,action,match_probs,lamb)
 
     for i in range(budget):
         past_rewards.append(rew)

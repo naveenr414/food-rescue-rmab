@@ -42,10 +42,10 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 44
+    seed        = 42
     n_arms      = 2
     volunteers_per_arm = 2
-    budget      = 3
+    budget      = 1
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 525
@@ -109,7 +109,7 @@ save_name = secrets.token_hex(4)
 n_states = 2
 n_actions = 2
 
-all_population_size = 98 # number of random arms to generate
+all_population_size = 96 # number of random arms to generate
 all_transitions = get_all_transitions(all_population_size)
 
 
@@ -255,7 +255,7 @@ name = "dqn_stable_step"
 
 print("Running DQN Step")
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,avg_reward=np.mean(results['linear_whittle_reward'][0]))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -266,8 +266,8 @@ print(np.mean(rewards['reward']))
 if is_jupyter:
     def plot_sliding_window(data):
         return [np.mean(data[i:i+100]) for i in range(len(data)-100)]
-    value_loss_1 = memory[0][6] # memory[0][5]
-    past_rewards = memory[0][3] # memory[0][2]
+    value_loss_1 = memory[0][6] # memory[0][4]  
+    past_rewards =memory[0][2] # memory[0][3] 
     avg_reward = [i for i in memory[0][-1]]
 
 if is_jupyter:  
@@ -278,7 +278,7 @@ if is_jupyter:
 
 if n_arms * volunteers_per_arm <= 4 and is_jupyter:
     errors = []
-    value_network = memory[-1][4]
+    value_network = memory[-1][5] # memory[-1][4]
 
     match_probability = simulator.match_probability_list 
     if match_probability != []:
