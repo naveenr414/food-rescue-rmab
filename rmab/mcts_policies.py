@@ -1014,9 +1014,16 @@ class StateAction():
             assert self.max_rollout_actions == self.budget 
             memory_whittle, memory_shapley = self.memory 
             state_WI = whittle_index(self.env,last_state,self.budget,self.lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley)
-            total_reward += np.sum(state_WI[last_action == 1])
-            total_reward -= np.sum((1-self.lamb)*last_state*last_action*memory_shapley)
-            total_reward -= np.sum(last_state)/len(last_state)*self.lamb
+            score_diff = (total_reward-(np.sum((1-self.lamb)*last_state*last_action*memory_shapley)+np.sum(last_state)/len(last_state)*self.lamb))
+            memory_shapley_normalized = deepcopy(memory_shapley)
+            memory_shapley_normalized[last_action == 0] = 0
+            if sum(memory_shapley_normalized) > 0:
+                memory_shapley_normalized /= np.sum(memory_shapley_normalized)
+            state_WI += memory_shapley_normalized * score_diff 
+
+            # whittle_score = np.sum(state_WI[last_action == 1])
+            total_reward = np.sum(state_WI[last_action == 1]) 
+            # total_reward += score_diff
         return total_reward
     
     def move(initial_state,action,transitions):
@@ -1089,7 +1096,6 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
 
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
-
     return action, memory
 
 
