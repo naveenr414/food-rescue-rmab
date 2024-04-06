@@ -2,7 +2,7 @@ import gym
 import numpy as np
 import gymnasium.spaces as spaces
 from rmab.fr_dynamics import get_db_data, train_rf,  get_match_probabilities
-
+from rmab.utils import custom_reward
 
 class RMABSimulator(gym.Env):
     '''
@@ -77,7 +77,7 @@ class RMABSimulator(gym.Env):
             self.cohort_selection[i, :] = np.random.choice(a=self.all_population, size=self.cohort_size, replace=False)
             print('cohort', self.cohort_selection[i, :])
             for ep in range(n_episodes):
-                self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size*self.volunteers_per_arm)
+                self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size*self.volunteers_per_arm,prob=0.5)
 
         if contextual: 
             if len(self.match_probability_list) > 0:
@@ -227,13 +227,22 @@ class RMABSimulator(gym.Env):
                 prob_all_inactive = np.prod(prod_state)
                 return 1-prob_all_inactive 
         elif self.reward_style == 'submodular': 
-            assert self.power != None 
+            # assert self.power != None 
             if action is None:
                 return 0
             else:
                 # TODO: Change this
                 probs = self.states*action*np.array(self.match_probability_list)[self.agent_idx]
                 return np.max(probs) # (np.sum(probs)+1)**self.power-1
+
+        elif self.reward_style == 'custom': 
+            # assert self.power != None 
+            if action is None:
+                return 0
+            else:
+                rew = custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx])
+                return rew 
+
 
 def random_transition(all_population, n_states, n_actions):
     all_transitions = np.random.random((all_population, n_states, n_actions, n_states))

@@ -334,3 +334,39 @@ def binary_search_count(arr, element):
             right = mid - 1
 
     return count
+
+def custom_reward(s,a,match_probabilities):
+    """Testing function to see how reward function impacts policies
+    
+    Arguments:
+        s: Numpy array for the state of length N
+        a: Numpy array for the state of lenghth N
+        match_probabilities: Numpy array of marginal rewards, length N
+    
+    Returns: Float, reward"""
+
+    probs = s*a*match_probabilities
+    value_by_combo = {
+        '0000': 0, 
+        '1000': probs[0], 
+        '0100': probs[1],
+        '0010': probs[2],
+        '0001': probs[3], 
+        '1100': max(probs[0],probs[1]), 
+        '1001': probs[0]+probs[3], 
+        '1010': max(probs[0],probs[2]),
+        '0110': max(probs[1],probs[2]), 
+        '0101': probs[1]+probs[3],
+        '0011': max(probs[2],probs[3]),
+        '0111': max(probs[1]+probs[3],probs[2]),
+        '1011': max(probs[0]+probs[3],probs[2]),
+        '1101': max(probs[0]+probs[3],probs[1]+probs[3]),
+        '1110': max(probs[0],max(probs[1],probs[2])),
+        '1111': max(max(probs[0],probs[1])+probs[3],probs[2])
+    }
+
+    str_state_action = s*a 
+    str_state_action = ''.join([str(i) for i in str_state_action])
+    val = value_by_combo[str_state_action]
+
+    return np.max(probs)

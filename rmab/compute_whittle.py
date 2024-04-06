@@ -7,7 +7,7 @@ POSSIBLE OPTIMIZATIONS TO HELP SPEED
 
 import numpy as np
 from itertools import product, combinations
-from rmab.utils import binary_to_decimal, list_to_binary
+from rmab.utils import binary_to_decimal, list_to_binary, custom_reward
 import random 
 
 whittle_threshold = 1e-6
@@ -36,7 +36,8 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
         return s*a*match_prob - a*predicted_subsidy 
 
     def combined_reward(s,a):
-        return s*a*match_prob*(1-lamb) + lamb*s/num_arms - a*predicted_subsidy 
+        rew = s*a*match_prob*(1-lamb) + lamb*s/num_arms - a*predicted_subsidy 
+        return rew 
 
     while np.max(difference) >= threshold:
         iters += 1
@@ -90,7 +91,6 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
     
     N = len(match_probability_list)
     num_real_states = 2**(N)
-
     value_func = np.array([random.random() for i in range(num_real_states)])
     difference = np.ones((num_real_states))
     iters = 0
@@ -114,12 +114,20 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
     def reward_combined(s,a):
         rew = (1-np.prod(np.power(1-match_probability_list,s*a)))*(1-lamb) + lamb*np.sum(s)/len(s)
         return rew
+    
+    def reward_linear(s,a):
+        rew = lamb*np.sum(s)/len(s) + (1-lamb)*np.sum(match_probability_list*s*a)
+        return rew 
 
     def reward_submodular(s,a):
         # TODO: Change this back
         match_probs = match_probability_list*s*a
         return np.max(match_probs)*(1-lamb) + lamb*np.sum(s)/len(s)
         #return ((np.sum(match_probability_list*s*a)+1)**power-1)*(1-lamb) + lamb*np.sum(s)/len(s)
+
+    def reward_custom(s,a):
+        val = custom_reward(s,a,match_probability_list)*(1-lamb) + lamb*np.sum(s)/len(s)
+        return val 
 
     if reward_function == 'activity':
         r = reward_activity
@@ -130,6 +138,8 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
     elif reward_function == 'submodular':
         assert power != None
         r = reward_submodular
+    elif reward_function == 'custom': 
+        r = reward_custom
     else:
         raise Exception("{} reward function not found".format(reward_function))
 

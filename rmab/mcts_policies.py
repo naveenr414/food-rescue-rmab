@@ -2,7 +2,9 @@ import numpy as np
 import random 
 
 from rmab.uc_whittle import Memoizer
-from rmab.omniscient_policies import whittle_index
+from rmab.omniscient_policies import whittle_index, shapley_index_custom, shapley_whittle_custom_policy
+from rmab.utils import custom_reward, binary_to_decimal, list_to_binary
+from rmab.compute_whittle import get_q_vals
 
 from copy import deepcopy
 
@@ -245,16 +247,9 @@ def update_value_function(past_states,past_actions,value_losses,value_network,cr
     combined =  torch.cat((future_states, future_actions), dim=1)
     future_values = value_network(combined).detach().numpy()   
     
-    # if len(past_states) > 500:
-    #     print("Future Values are {}".format(np.mean(future_values)))
-
     future_values *= env.discount
 
     future_values += (1-non_match_prob)*(1-lamb) + np.mean(state)*lamb
-
-    # if len(past_states) > 500:
-    #     print("Present values are {}".format((1-non_match_prob)*(1-lamb) + np.mean(state)*lamb))
-    #     print("Total values are {}".format(np.mean(future_values)))
 
     target = torch.Tensor(future_values)
     input_data = torch.Tensor([list(past_states[random_point])+list(past_actions[random_point]) for i in range(25)])
@@ -513,6 +508,9 @@ def get_reward_max(state,action,match_probs,lamb):
     score = np.max(prod_state)
     return score*(1-lamb) + np.sum(state)/len(state)*lamb
 
+def get_reward_custom(state,action,match_probs,lamb):
+    return custom_reward(state,action,match_probs)*(1-lamb) + np.sum(state)/len(state)*lamb
+
 
 def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=False):
     """Use a DQN policy to compute the action values
@@ -556,7 +554,6 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
         q_network = MLP(len(state), 128, len(valid_actions))
         criterion = nn.MSELoss()
         optimizer = optim.Adam(q_network.parameters(), lr=value_lr)
-        # TODO: Remove this 
         q_network.fc3.bias = torch.nn.Parameter(torch.Tensor([round(env.avg_reward) for i in range(len(q_network.fc3.bias))]))
         target_model = MLP(len(state), 128, len(valid_actions))
         target_model.load_state_dict(q_network.state_dict())
@@ -864,6 +861,7 @@ class MonteCarloTreeSearchNode():
         self.children = []
         self._number_of_visits = 0
         self._results = []
+        self.results_children = {}
         self._untried_actions = None
         self._untried_actions = self.untried_actions()
         self.transitions = transitions 
@@ -877,11 +875,10 @@ class MonteCarloTreeSearchNode():
         return self._untried_actions
 
     def q(self):
-        rewards = np.array([i[0] for i in self._results])
-        probs = np.array([i[1] for i in self._results])
-        probs /= np.sum(probs)
-        return float(np.sum(rewards * probs))*len(rewards)
-        # return np.sum(rewards)    
+        if self.is_terminal_node():
+            return np.mean(self._results)*self._number_of_visits
+        else:
+            return np.max(list(self.results_children.values()))*self._number_of_visits
 
     def n(self):
         return self._number_of_visits
@@ -889,6 +886,7 @@ class MonteCarloTreeSearchNode():
     def expand(self):
         action = self._untried_actions.pop()
         next_state = StateAction.move(self.state,action,self.transitions)
+        next_state.memory = self.state.memory 
         child_node = MonteCarloTreeSearchNode(
             next_state, self.simulation_no,self.transitions,parent=self, parent_action=action,use_whittle=self.use_whittle)
 
@@ -901,24 +899,29 @@ class MonteCarloTreeSearchNode():
     def rollout(self):
         current_rollout_state = self.state
         
+        tick = 0
+        start = time.time()
         while not current_rollout_state.is_game_over():
-            
+            tick += 1
             possible_moves = current_rollout_state.get_legal_actions()
             action = self.rollout_policy(possible_moves)
-            current_rollout_state = current_rollout_state.move(action,self.transitions)
+            current_rollout_state = current_rollout_state.move(action,self.transitions)        
         return current_rollout_state.game_result()
 
-    def backpropagate(self, result):
+    def backpropagate(self, result,action=None):
         self._number_of_visits += 1.
-        self._results.append(result)
+        if self.is_terminal_node():
+            self._results.append(result)
+            result = np.mean(self._results)
+        else:
+            self.results_children[action] = result 
         if self.parent:
-            self.parent.backpropagate(result)
+            self.parent.backpropagate(result,self.parent_action)
 
     def is_fully_expanded(self):
         return len(self._untried_actions) == 0
 
     def best_child(self, c_param=5):
-        
         choices_weights = [(c.q() / c.n()) + c_param * np.sqrt((2 * np.log(self.n()) / c.n())) for c in self.children]
         return self.children[np.argmax(choices_weights)]
 
@@ -939,24 +942,32 @@ class MonteCarloTreeSearchNode():
                 current_node = current_node.best_child()
         return current_node
 
-    def best_action(self):
+    def best_action(self,budget):
         simulation_no = self.simulation_no
         
         for i in range(simulation_no):
+            start = time.time()
             v = self._tree_policy()
             reward = v.rollout()
             v.backpropagate(reward)
         choices_weights = [(c.q() / c.n(),c.n()) + 0 * np.sqrt((2 * np.log(self.n()) / c.n())) for c in self.children]
-        return self.best_child(c_param=0.)
+        curr_node = self 
+        actions = []
+        for i in range(budget):
+            best_child = curr_node.best_child(c_param=0.)
+            actions.append(best_child.parent_action)
+            curr_node = best_child 
+
+        return actions 
     
     def __str__(self):
         return str(self.state)
 
 class StateAction():
-    def __init__(self,budget,discount,lamb,initial_state,volunteers_per_arm,n_arms,match_probs,max_rollout_actions,env):
+    def __init__(self,budget,discount,lamb,initial_state,volunteers_per_arm,n_arms,match_probs,max_rollout_actions,env,shapley=False):
         self.budget = budget 
         self.discount = discount 
-        self.lamb = lamb 
+        self.lamb = lamb  
         self.volunteers_per_arm = volunteers_per_arm 
         self.n_arms = n_arms
         self.match_probs = match_probs 
@@ -964,7 +975,9 @@ class StateAction():
         self.previous_state_actions = []
         self.current_state = initial_state 
         self.env = env 
-    
+        self.shapley = shapley 
+        self.memory = None
+
     def get_legal_actions(self):
         idx = len(self.previous_state_actions)//self.budget*self.budget 
         current_state_actions = self.previous_state_actions[idx:]
@@ -981,7 +994,6 @@ class StateAction():
         total_reward = 0
         last_state = []
         last_action = []
-        prob = 1 
 
         for i in range(self.max_rollout_actions//self.budget):
             state_choices = self.previous_state_actions[i*self.budget:(i+1)*self.budget]
@@ -994,14 +1006,18 @@ class StateAction():
                 else:
                     action_0_1.append(0)
             action_0_1 = np.array(action_0_1)
-            total_reward += self.discount**i * get_reward(corresponding_state,action_0_1,self.match_probs,self.lamb)
-            if last_state != []:
-                for i in range(len(last_state)):
-                    prob *= self.env.transitions[i//self.env.volunteers_per_arm][last_state[i]][last_action[i]][corresponding_state[i]]
+            total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb)
             last_state = corresponding_state
             last_action = action_0_1
 
-        return (total_reward,prob)
+        if self.shapley:
+            assert self.max_rollout_actions == self.budget 
+            memory_whittle, memory_shapley = self.memory 
+            state_WI = whittle_index(self.env,last_state,self.budget,self.lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley)
+            total_reward += np.sum(state_WI[last_action == 1])
+            total_reward -= np.sum((1-self.lamb)*last_state*last_action*memory_shapley)
+            total_reward -= np.sum(last_state)/len(last_state)*self.lamb
+        return total_reward
     
     def move(initial_state,action,transitions):
         previous_state_actions = deepcopy(initial_state.previous_state_actions)
@@ -1034,13 +1050,16 @@ class StateAction():
 
 def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
     N = len(state)
-    rollout = budget*5
+    rollout = budget
     match_probs = np.array(env.match_probability_list)[env.agent_idx]
     state_actions = []
+    if memory == None:
+        memory = Memoizer('optimal'),np.array(shapley_index_custom(env,np.ones(len(env.agent_idx)),{})[0])
 
     for i in range(budget):
         s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env)
         s.previous_state_actions = state_actions
+        s.memory = memory 
         root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions)
         selected_node = root.best_action()
         state_actions = selected_node.state.previous_state_actions
@@ -1049,7 +1068,30 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
 
-    return action, None
+    return action, memory 
+
+def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    N = len(state)
+    rollout = budget
+    match_probs = np.array(env.match_probability_list)[env.agent_idx]
+    state_actions = []
+
+    if memory == None:
+        memory = Memoizer('optimal'),np.array(shapley_index_custom(env,np.ones(len(env.agent_idx)),{})[0])
+
+    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env,shapley=True)
+    s.previous_state_actions = state_actions
+    s.memory = memory 
+    s.per_epoch_results = per_epoch_results
+    root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions)
+    selected_idx = root.best_action(budget)
+    memory = s.memory 
+
+    action = np.zeros(N, dtype=np.int8)
+    action[selected_idx] = 1
+
+    return action, memory
+
 
 def mcts_whittle_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
     N = len(state)
