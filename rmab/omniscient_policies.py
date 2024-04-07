@@ -4,7 +4,7 @@ import numpy as np
 import heapq
 
 from rmab.uc_whittle import Memoizer
-from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_v_iteration, get_q_vals
+from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_v_iteration, get_q_vals, fake_arm_compute_whittle_multi_prob
 from rmab.utils import binary_to_decimal, custom_reward
 from itertools import combinations
 from rmab.simulator import generate_random_context
@@ -22,7 +22,7 @@ import random
 import time
 import scipy
 
-def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shapley_values=None,contextual=False,match_probs=None):
+def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shapley_values=None,contextual=False,match_probs=None,match_prob_now=None):
     """Get the Whittle indices for each agent in a given state
     
     Arguments:
@@ -54,15 +54,24 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
         if reward_function == "activity":
             check_set_val = memoizer.check_set(arm_transitions, state[i])
         else:
-            check_set_val = memoizer.check_set(arm_transitions+round(match_probability_list[i],4), state[i])
+            if match_prob_now is not None: 
+                check_set_val = memoizer.check_set(arm_transitions+round(match_probability_list[i],4)+round(match_prob_now[i],4), state[i])
+            else:
+                check_set_val = memoizer.check_set(arm_transitions+round(match_probability_list[i],4), state[i])
         if check_set_val != -1:
             state_WI[i] = check_set_val
         else:
-            state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],num_arms=len(state))
+            if match_prob_now is not None:
+                state_WI[i] = fake_arm_compute_whittle_multi_prob(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],match_prob_now=match_prob_now[i],num_arms=len(state))
+            else:
+                state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],num_arms=len(state))
             if reward_function == "activity":
                 memoizer.add_set(arm_transitions, state[i], state_WI[i])
             else:
-                memoizer.add_set(arm_transitions+round(match_probability_list[i],4), state[i], state_WI[i])
+                if match_prob_now is not None:
+                    memoizer.add_set(arm_transitions+round(match_probability_list[i],4)+round(match_prob_now[i],4), state[i], state_WI[i])
+                else:
+                    memoizer.add_set(arm_transitions+round(match_probability_list[i],4), state[i], state_WI[i])
     
             
 
@@ -909,7 +918,6 @@ def shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_result
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
     action[sorted_WI[:budget]] = 1
-
     return action, (memory_whittle, memory_shapley)
 
 

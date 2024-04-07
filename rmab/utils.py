@@ -370,6 +370,5 @@ def custom_reward(s,a,match_probabilities):
     # str_state_action = ''.join([str(i) for i in str_state_action])
     # val = value_by_combo[str_state_action]
 
-    # return np.max(probs)
-    rew = 1-np.prod(1-np.array(probs)) 
-    return rew 
+    # return val   
+    return np.max(probs)

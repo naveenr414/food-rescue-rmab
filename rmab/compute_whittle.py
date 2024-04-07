@@ -179,6 +179,59 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
         difference = np.abs(orig_value_func - value_func)
     return Q_func 
 
+def Q_multi_prob(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='combined',lamb=0.5,
+                        match_prob=0.5,match_prob_now=1,num_arms=1):
+    """ value iteration for a single arm at a time
+
+    value iteration for the MDP defined by transitions with lambda-adjusted reward function
+    return action corresponding to pi^*(s_I)
+    """
+    assert discount < 1
+    assert state == 1
+
+    new_transitions = np.zeros((3,2))
+    new_transitions[:2,:2] = transitions 
+    new_transitions[2,:] = transitions[1]
+    transitions = new_transitions 
+
+    n_states, n_actions = transitions.shape
+
+    value_func = np.array([random.random() for i in range(n_states)])
+    difference = np.ones((n_states))
+    iters = 0
+
+
+    def combined_reward(s,a):
+        if s == 2:
+            s = 1 
+            rew = s*a*match_prob_now*(1-lamb) + lamb*s/num_arms - a*predicted_subsidy 
+        else:
+            rew = s*a*match_prob*(1-lamb) + lamb*s/num_arms - a*predicted_subsidy 
+        return rew 
+
+    while np.max(difference) >= threshold:
+        iters += 1
+        orig_value_func = np.copy(value_func)
+
+        # calculate Q-function
+        Q_func = np.zeros((n_states, n_actions))
+        for s in range(n_states):
+            for a in range(n_actions):
+                r = combined_reward                    
+                # transitioning to state = 0
+                Q_func[s, a] += (1 - transitions[s, a]) * (r(s, a) + discount * value_func[0])
+
+                # # transitioning to state = 1
+                Q_func[s, a] += transitions[s, a] * (r(s, a) + discount * value_func[1])
+
+            value_func[s] = np.max(Q_func[s, :])
+
+        difference = np.abs(orig_value_func - value_func)
+
+    # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
+    return Q_func
+
+
 def arm_value_iteration(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
                         match_prob=0.5,num_arms=1):
     """ value iteration for a single arm at a time
@@ -200,9 +253,9 @@ def arm_value_v_iteration(transitions, state, predicted_subsidy, discount, thres
     return np.argmax(Q_vals), np.max(Q_vals), v_vals 
 
 def get_init_bounds(transitions,lamb=0):
-    lamb = max(lamb,1)+1
-    lb = -lamb
-    ub = lamb
+    # TODO: Change this back 
+    lb = -100
+    ub = 100
     return lb, ub
 
 def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0,match_prob=0.5,match_probability_list=[],get_v=False,num_arms=1):
@@ -221,8 +274,9 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
         predicted_subsidy = (lb + ub) / 2
 
         # we've already filled our knapsack with higher-valued WIs
-        if ub < subsidy_break:
-            return -10
+        # TODO: Incorporate this back in 
+        # if ub < subsidy_break:
+        #     return -10
 
         if get_v:
             action, value, v_val = arm_value_v_iteration(transitions, state, predicted_subsidy, discount,reward_function=reward_function,lamb=lamb,
@@ -246,3 +300,52 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
         return subsidy, value, v_val
 
     return subsidy
+
+def arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0,match_prob=0.5,match_prob_now=1,match_probability_list=[],get_v=False,num_arms=1):
+    """
+    compute whittle index for a single arm using binary search
+
+    subsidy_break = the min value at which we stop iterating
+
+    param transitions:
+    param eps: epsilon convergence
+    returns Whittle index
+    """
+    lb, ub = get_init_bounds(transitions,lamb) # return lower and upper bounds on WI
+    assert state == 1
+
+    while abs(ub - lb) > eps:
+        predicted_subsidy = (lb + ub) / 2
+        Q_multi = Q_multi_prob(transitions, state, predicted_subsidy, discount,reward_function=reward_function,lamb=lamb,
+                    match_prob=match_prob,match_prob_now=match_prob_now,num_arms=num_arms)
+        action = np.argmax(Q_multi[2,:])
+        if action == 0:
+            # optimal action is passive: subsidy is too high
+            ub = predicted_subsidy
+        elif action == 1:
+            # optimal action is active: subsidy is too low
+            lb = predicted_subsidy
+        else:
+            raise Exception(f'action not binary: {action}')
+    
+    subsidy = (ub + lb) / 2
+
+    return subsidy
+
+
+def fake_arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=0.5,match_prob=0.5,match_prob_now=0,num_arms=4):
+    if state != 1:
+        return arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=lamb,match_prob=match_prob,num_arms=num_arms)
+
+    a = transitions[0,0]
+    b = transitions[0,1]
+    c = transitions[1,0]
+    d = transitions[1,1]
+    N = num_arms 
+
+    if match_prob_now > match_prob:
+        return arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=lamb,match_prob=match_prob,num_arms=num_arms) + (match_prob_now-match_prob)*lamb
+    else:
+        top = -((-1 + lamb)*(1 + a*discount)*N*match_prob_now) + c*discount* (-lamb + (-1 + lamb)*N*match_prob)+d*discount* (lamb + lamb* N*(match_prob_now - match_prob) + N*(-match_prob_now + match_prob))
+        bottom = N*(1+a*discount-c*discount)
+        return top/bottom

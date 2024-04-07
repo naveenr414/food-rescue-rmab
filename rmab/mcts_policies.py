@@ -4,7 +4,7 @@ import random
 from rmab.uc_whittle import Memoizer
 from rmab.omniscient_policies import whittle_index, shapley_index_custom, shapley_whittle_custom_policy
 from rmab.utils import custom_reward, binary_to_decimal, list_to_binary
-from rmab.compute_whittle import get_q_vals
+from rmab.compute_whittle import get_q_vals, arm_compute_whittle, arm_compute_whittle_multi_prob
 
 from copy import deepcopy
 
@@ -906,6 +906,7 @@ class MonteCarloTreeSearchNode():
             possible_moves = current_rollout_state.get_legal_actions()
             action = self.rollout_policy(possible_moves)
             current_rollout_state = current_rollout_state.move(action,self.transitions)        
+
         return current_rollout_state.game_result()
 
     def backpropagate(self, result,action=None):
@@ -944,19 +945,20 @@ class MonteCarloTreeSearchNode():
 
     def best_action(self,budget):
         simulation_no = self.simulation_no
-        
         for i in range(simulation_no):
-            start = time.time()
             v = self._tree_policy()
             reward = v.rollout()
             v.backpropagate(reward)
-        choices_weights = [(c.q() / c.n(),c.n()) + 0 * np.sqrt((2 * np.log(self.n()) / c.n())) for c in self.children]
         curr_node = self 
         actions = []
         for i in range(budget):
-            best_child = curr_node.best_child(c_param=0.)
-            actions.append(best_child.parent_action)
-            curr_node = best_child 
+            if len(curr_node.children) == 0:
+                possible_values = curr_node.state.get_legal_actions()
+                actions += random.sample(possible_values,budget-i)
+            else:
+                best_child = curr_node.best_child(c_param=0.)
+                actions.append(best_child.parent_action)
+                curr_node = best_child 
 
         return actions 
     
@@ -994,6 +996,13 @@ class StateAction():
         total_reward = 0
         last_state = []
         last_action = []
+        base_state = self.previous_state_actions[0][0]
+        state_WI = whittle_index(self.env,base_state,self.budget,self.lamb,self.memory[0],reward_function="combined",match_probs=self.memory[1])
+        sorted_WI = np.argsort(state_WI)[::-1]
+        base_action = np.zeros(len(state_WI), dtype=np.int8)
+        base_action[sorted_WI[:self.budget]] = 1
+        base_reward = get_reward_custom(base_state,base_action,self.match_probs,self.lamb)
+        base_WI = np.sum(state_WI[base_action == 1])
 
         for i in range(self.max_rollout_actions//self.budget):
             state_choices = self.previous_state_actions[i*self.budget:(i+1)*self.budget]
@@ -1013,17 +1022,36 @@ class StateAction():
         if self.shapley:
             assert self.max_rollout_actions == self.budget 
             memory_whittle, memory_shapley = self.memory 
-            state_WI = whittle_index(self.env,last_state,self.budget,self.lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley)
-            score_diff = (total_reward-(np.sum((1-self.lamb)*last_state*last_action*memory_shapley)+np.sum(last_state)/len(last_state)*self.lamb))
             memory_shapley_normalized = deepcopy(memory_shapley)
-            memory_shapley_normalized[last_action == 0] = 0
+            memory_shapley_normalized *= last_state*last_action 
             if sum(memory_shapley_normalized) > 0:
                 memory_shapley_normalized /= np.sum(memory_shapley_normalized)
-            state_WI += memory_shapley_normalized * score_diff 
+            memory_shapley_normalized *= total_reward 
+            state_WI = whittle_index(self.env,last_state,self.budget,self.lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley,match_prob_now=memory_shapley_normalized)
 
-            # whittle_score = np.sum(state_WI[last_action == 1])
-            total_reward = np.sum(state_WI[last_action == 1]) 
-            # total_reward += score_diff
+            total_reward = np.sum(np.array(state_WI)[last_action == 1])
+            # state_WI = []
+            # for i in range(len(last_state)):
+            #     if last_state[i] == 1:
+            #         state_WI.append(arm_compute_whittle_multi_prob(self.env.transitions[i//self.env.volunteers_per_arm,:,:,1], last_state[i], self.discount, 100, eps=1e-3,reward_function='combined',lamb=self.lamb,match_prob=memory_shapley[i],match_prob_now=memory_shapley_normalized[i],num_arms=len(last_state))) 
+            #     else:
+            #         state_WI.append(
+            #             arm_compute_whittle(self.env.transitions[i//self.env.volunteers_per_arm,:,:,1], last_state[i], self.discount, 100, eps=1e-3,reward_function='combined',lamb=self.lamb,match_prob=memory_shapley[i],num_arms=len(last_state)))
+            # total_reward_2 = np.sum(np.array(state_WI)[last_action == 1])
+            # assert abs(total_reward_2-total_reward) < 0.001
+
+            # memory_whittle, memory_shapley = self.memory 
+            # state_WI = whittle_index(self.env,last_state,self.budget,self.lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley)
+            # self.memory = (memory_whittle, memory_shapley)
+            # score_diff = (total_reward-(np.sum((1-self.lamb)*last_state*last_action*memory_shapley)+np.sum(last_state)/len(last_state)*self.lamb))
+            # memory_shapley_normalized = deepcopy(memory_shapley)
+            # memory_shapley_normalized *= last_state*last_action 
+            # if sum(memory_shapley_normalized) > 0:
+            #     memory_shapley_normalized /= np.sum(memory_shapley_normalized)
+            # state_WI += memory_shapley_normalized * score_diff 
+
+
+            # total_reward = np.sum(state_WI[last_action == 1]) 
         return total_reward
     
     def move(initial_state,action,transitions):
@@ -1032,22 +1060,28 @@ class StateAction():
 
         new_state_object = deepcopy(initial_state)
         new_state_object.previous_state_actions = previous_state_actions
+        new_state_object.memory = initial_state.memory 
 
-        if len(previous_state_actions)%new_state_object.budget == 0:
-            new_state = [0 for i in range(len(new_state_object.current_state))]
-            played_actions = [i[1] for i in previous_state_actions[-new_state_object.budget:]]
-            action_0_1 = [0 for i in range(len(new_state))]
+        # TODO: Add this back in
 
-            for i in played_actions:
-                action_0_1[i] = 1
+        # if len(previous_state_actions)%new_state_object.budget == 0:
+        #     new_state = [0 for i in range(len(new_state_object.current_state))]
+        #     played_actions = [i[1] for i in previous_state_actions[-new_state_object.budget:]]
+        #     action_0_1 = [0 for i in range(len(new_state))]
 
-            for i in range(new_state_object.n_arms):
-                for j in range(new_state_object.volunteers_per_arm):
-                    idx = i*new_state_object.volunteers_per_arm + j
-                    prob = transitions[i, new_state_object.current_state[idx], action_0_1[idx], :]
-                    next_state = int(random.random()>prob[0])
-                    new_state[idx] = next_state
-            new_state_object.current_state = new_state
+        #     for i in played_actions:
+        #         action_0_1[i] = 1
+
+        #     for i in range(new_state_object.n_arms):
+
+        #         for j in range(new_state_object.volunteers_per_arm):
+        #             idx = i*new_state_object.volunteers_per_arm + j
+        #             prob = transitions[i, new_state_object.current_state[idx], action_0_1[idx], :]
+        #             # a = random.random() 
+        #             a = 1
+        #             next_state = int(a>prob[0])
+        #             new_state[idx] = next_state
+        #     new_state_object.current_state = new_state
         
         return new_state_object 
     
@@ -1070,6 +1104,7 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
         root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions)
         selected_node = root.best_action()
         state_actions = selected_node.state.previous_state_actions
+        memory = s.memory 
 
     selected_idx = [i[1] for i in state_actions]
     action = np.zeros(N, dtype=np.int8)
@@ -1096,6 +1131,9 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
 
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
+
+    shapley_action = shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_results)
+
     return action, memory
 
 
