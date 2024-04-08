@@ -181,10 +181,28 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
 
 def Q_multi_prob(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='combined',lamb=0.5,
                         match_prob=0.5,match_prob_now=1,num_arms=1):
-    """ value iteration for a single arm at a time
+    """Value iteration when initial and subsequent rewards differ
+        We do this through Q Iteration on 3 states
+        State 0 and 1 are as normal, while 
+        State 2 assumes we get match_prob_now reward, then we transition
+        to state 0 or 1, with the same transitions as state 1
 
-    value iteration for the MDP defined by transitions with lambda-adjusted reward function
-    return action corresponding to pi^*(s_I)
+    Arguments:
+        transitions: Numpy array of size 2x2 (for 2 states x 2 actions)
+        state: Integer; which state the arm is currently in
+            Will compute Q(s,0) and Q(s,1)
+        predicted_subsidy: Float, how much to penalize pulling an arm by
+        discount: Float, \gamma, how much to discount future rewards
+        threshold: Loop exit condition; when value error <= threshold
+            we break
+        match_prob: Float; how much reward we get when pulling an arm
+            in later time steps
+        match_prob_now: Float; how much reward we get when pulling an arm
+            in this time step
+        num_arms: Total number of arms, N
+    
+    Returns: 3x2 Numpy array, where Q(2,a) is 
+        the rewards for pulling/not pulling an arm now
     """
     assert discount < 1
     assert state == 1
@@ -199,7 +217,6 @@ def Q_multi_prob(transitions, state, predicted_subsidy, discount, threshold=valu
     value_func = np.array([random.random() for i in range(n_states)])
     difference = np.ones((n_states))
     iters = 0
-
 
     def combined_reward(s,a):
         if s == 2:
@@ -253,9 +270,16 @@ def arm_value_v_iteration(transitions, state, predicted_subsidy, discount, thres
     return np.argmax(Q_vals), np.max(Q_vals), v_vals 
 
 def get_init_bounds(transitions,lamb=0):
-    # TODO: Change this back 
-    lb = -100
-    ub = 100
+    """Generate bounds for upper and lower bounds on penalty
+    
+    Arguments:
+        transitions: 2x2 numpy array; T(s,a,1)
+        lamb: Float, lambda value, balancing global, engagement reward
+    
+    Returns: Tuple of Floats, lower and upper bounds"""
+
+    lb = -1000
+    ub = 1000
     return lb, ub
 
 def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0,match_prob=0.5,match_probability_list=[],get_v=False,num_arms=1):
@@ -304,8 +328,7 @@ def arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle
 def arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0,match_prob=0.5,match_prob_now=1,match_probability_list=[],get_v=False,num_arms=1):
     """
     compute whittle index for a single arm using binary search
-
-    subsidy_break = the min value at which we stop iterating
+    Takes into account the multi-stage rewards (reward now vs. reward later)
 
     param transitions:
     param eps: epsilon convergence
@@ -333,19 +356,30 @@ def arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_break, 
     return subsidy
 
 
-def fake_arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=0.5,match_prob=0.5,match_prob_now=0,num_arms=4):
+def fast_arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=0.5,match_prob=0.5,match_prob_now=0,num_arms=4):
+    """Faster Version of Computing Whittle with multiple probabilities
+    Uses explicit formulas for the Whittle index, which were solved through Mathematica
+    Doing so avoids expensive Q Iteration
+    
+    Arguments:  
+        transitions: 2x2 numpy array, T(s,a,1)
+        state: Integer, 0 or 1
+        discount: Float, \gamma, future discount
+        subsidy_break: Minimum subsidy, used to compute Whittle when state != 1
+    
+    Returns: Whittle Index"""
+    
     if state != 1:
         return arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=lamb,match_prob=match_prob,num_arms=num_arms)
-
-    a = transitions[0,0]
-    b = transitions[0,1]
-    c = transitions[1,0]
-    d = transitions[1,1]
-    N = num_arms 
 
     if match_prob_now > match_prob:
         return arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=lamb,match_prob=match_prob,num_arms=num_arms) + (match_prob_now-match_prob)*(1-lamb)
     else:
+        # Use Explicit Formulas from Solving Q Iteration
+        a = transitions[0,0]
+        c = transitions[1,0]
+        d = transitions[1,1]
+        N = num_arms 
         top = -((-1 + lamb)*(1 + a*discount)*N*match_prob_now) + c*discount* (-lamb + (-1 + lamb)*N*match_prob)+d*discount* (lamb + lamb* N*(match_prob_now - match_prob) + N*(-match_prob_now + match_prob))
         bottom = N*(1+a*discount-c*discount)
         return top/bottom

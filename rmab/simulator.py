@@ -3,6 +3,9 @@ import numpy as np
 import gymnasium.spaces as spaces
 from rmab.fr_dynamics import get_db_data, train_rf,  get_match_probabilities
 from rmab.utils import custom_reward
+import random
+import torch 
+import time 
 
 class RMABSimulator(gym.Env):
     '''
@@ -227,22 +230,17 @@ class RMABSimulator(gym.Env):
                 prob_all_inactive = np.prod(prod_state)
                 return 1-prob_all_inactive 
         elif self.reward_style == 'submodular': 
-            # assert self.power != None 
             if action is None:
                 return 0
             else:
-                # TODO: Change this
                 probs = self.states*action*np.array(self.match_probability_list)[self.agent_idx]
-                return np.max(probs) # (np.sum(probs)+1)**self.power-1
+                return np.max(probs) 
 
         elif self.reward_style == 'custom': 
-            # assert self.power != None 
             if action is None:
                 return 0
             else:
-                rew = custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx])
-                return rew 
-
+                return custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx])
 
 def random_transition(all_population, n_states, n_actions):
     all_transitions = np.random.random((all_population, n_states, n_actions, n_states))
@@ -419,3 +417,127 @@ if __name__ == '__main__':
             total_reward += reward
 
         print('total reward: {}'.format(total_reward))
+
+
+def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_epoch_function=None,lamb=0,get_memory=False,should_train=False,test_T=0):
+    """Wrapper to run policies without needing to go through boilerplate code
+    
+    Arguments:
+        env: Simualtor environment
+        n_episodes: How many episodes to run for each epoch
+            T = n_episodes * episode_len
+        n_epochs: Number of different epochs/cohorts to run
+        discount: Float, how much to discount rewards by
+        policy: Function that takes in environment, state, budget, and lambda
+            produces action as a result
+        seed: Random seed for run
+        lamb: Float, tradeoff between matching, activity
+    
+    Returns: Two things
+        matching reward - Numpy array of Epochs x T, with rewards for each combo
+        activity rate - Average rate of engagement across all volunteers
+        We aim to maximize matching reward + lamb*n_arms*activity_rate"""
+
+    N         = env.cohort_size*env.volunteers_per_arm
+    n_states  = env.number_states
+    n_actions = env.all_transitions.shape[2]
+    budget    = env.budget
+    T         = env.episode_len * n_episodes
+    env.lamb = lamb 
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    env.reset_all()
+
+    if should_train:
+        all_reward = np.zeros((n_epochs,test_T))
+        all_active_rate = np.zeros((n_epochs,test_T))
+    else:
+        all_reward = np.zeros((n_epochs, T))
+        all_active_rate = np.zeros((n_epochs,T))
+    env.train_epochs = T-test_T
+    env.test_epochs = test_T
+
+    inference_time_taken = 0
+    train_time_taken = 0
+
+    for epoch in range(n_epochs):
+        if not should_train:
+            np.random.seed(seed)
+            start = time.time()
+
+        train_time_start = time.time() 
+
+        if epoch != 0: env.reset_instance()
+        first_state = env.observe()
+        if len(first_state)>20:
+            first_state = first_state[:20]
+
+        if per_epoch_function:
+            per_epoch_results = per_epoch_function(env,lamb)
+        else:
+            per_epoch_results = None 
+
+        memory = None 
+        for t in range(0, T):
+            state = env.observe()
+            if should_train:
+                if t>=T-test_T:
+                    all_active_rate[epoch,t-(T-test_T)] = np.sum(state)/len(state)
+            else:
+                all_active_rate[epoch,t] = np.sum(state)/len(state)
+
+            action,memory = policy(env,state,budget,lamb,memory,per_epoch_results)
+            next_state, reward, done, _ = env.step(action)
+
+            if done and t+1 < T: env.reset()
+
+            if t == T-test_T:
+                train_time_taken += time.time()-train_time_start
+
+            if should_train:
+                if t == T-test_T:
+                    np.random.seed(seed)
+                    start = time.time()
+
+                if t < (T-test_T):
+                    env.total_active = 0
+                else:
+                    all_reward[epoch, t-(T-test_T)] = reward
+            else:
+                all_reward[epoch, t] = reward
+        inference_time_taken += time.time()-start 
+    env.time_taken = inference_time_taken
+    env.train_time = train_time_taken
+
+    print("Took {} time for inference and {} time for training".format(inference_time_taken,train_time_taken))
+
+    if get_memory:
+        return all_reward, all_active_rate, memory
+    return all_reward, all_active_rate
+
+def get_discounted_reward(global_reward,active_rate,discount,lamb):
+    """Compute the discounted combination of global reward and active rate
+    
+    Arguments: 
+        global_reward: numpy array of size n_epochs x T
+        active_rate: numpy array of size n_epochs x T
+        discount: float, gamma
+
+    Returns: Float, average discounted reward across all epochs"""
+
+    all_rewards = []
+    combined_reward = global_reward*(1-lamb) + lamb*active_rate
+    num_steps = 1
+
+    step_size = len(global_reward[0])//num_steps
+
+    for epoch in range(len(global_reward)):
+        for i in range(num_steps):
+            reward = 0
+            for t in range(i*step_size,(i+1)*step_size):
+                reward += combined_reward[epoch,t]*discount**(t-i*step_size)
+            all_rewards.append(reward)
+    return np.mean(all_rewards)
