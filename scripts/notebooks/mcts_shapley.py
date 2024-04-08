@@ -12,7 +12,7 @@
 #     name: python3
 # ---
 
-# # Semi Synthetic Experiments
+# # MCTS + Whittle Indices Experiments
 
 # Analyze the performance of various algorithms to solve the joint matching + activity task, when the number of volunteers is large and structured
 
@@ -27,7 +27,7 @@ import argparse
 import sys
 import secrets
 
-from rmab.simulator import RMABSimulator
+from rmab.simulator import RMABSimulator, run_heterogenous_policy, get_discounted_reward
 from rmab.omniscient_policies import *
 from rmab.fr_dynamics import get_all_transitions
 from rmab.compute_whittle import arm_compute_whittle_multi_prob
@@ -43,10 +43,10 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 45
-    n_arms      = 2
-    volunteers_per_arm = 5
-    budget      = 3
+    seed        = 43
+    n_arms      = 1
+    volunteers_per_arm = 4
+    budget      = 4
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 1
@@ -54,13 +54,15 @@ if is_jupyter:
     n_epochs    = 1
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
-    lamb = 0.5
+    lamb = 0
     prob_distro = 'uniform'
+    reward_type = "set_cover"
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 3, 'arm_set_high': 6}
     policy_lr=5e-3
     value_lr=1e-4
     train_iterations = 30
     test_iterations = 30
-    out_folder = 'mcts_exploration/mcts_whittle'
+    out_folder = 'mcts_exploration/mcts_shapley'
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
@@ -72,6 +74,10 @@ else:
     parser.add_argument('--discount',       '-d', help='discount factor', type=float, default=0.9)
     parser.add_argument('--alpha',          '-a', help='alpha: for conf radius', type=float, default=3)
     parser.add_argument('--lamb',          '-l', help='lambda for matching-engagement tradeoff', type=float, default=0.5)
+    parser.add_argument('--universe_size', help='For set cover, total num unvierse elems', type=int, default=10)
+    parser.add_argument('--arm_set_low', help='Least size of arm set, for set cover', type=int, default=3)
+    parser.add_argument('--arm_set_high', help='Largest size of arm set, for set cover', type=int, default=6)
+    parser.add_argument('--reward_type',          '-r', help='Which type of custom reward', type=str, default='set_cover')
     parser.add_argument('--seed',           '-s', help='random seed', type=int, default=42)
     parser.add_argument('--prob_distro',           '-p', help='which prob distro [uniform,uniform_small,uniform_large,normal]', type=str, default='uniform')
     parser.add_argument('--time_per_run',      '-t', help='time per MCTS run', type=float, default=.01*1000)
@@ -79,7 +85,7 @@ else:
     parser.add_argument('--value_lr', help='Learning Rate Value', type=float, default=1e-4)
     parser.add_argument('--train_iterations', help='Number of MCTS train iterations', type=int, default=30)
     parser.add_argument('--test_iterations', help='Number of MCTS test iterations', type=int, default=30)
-    parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='mcts_exploration/mcts_whittle')
+    parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='mcts_exploration/mcts_shapley')
 
     parser.add_argument('--use_date', action='store_true')
 
@@ -103,6 +109,10 @@ else:
     out_folder = args.out_folder
     train_iterations = args.train_iterations 
     test_iterations = args.test_iterations 
+    reward_type = args.reward_type
+    reward_parameters = {'universe_size': args.universe_size,
+                        'arm_set_low': args.arm_set_low, 
+                        'arm_set_high': args.arm_set_high}
 
 save_name = secrets.token_hex(4)  
 # -
@@ -110,7 +120,7 @@ save_name = secrets.token_hex(4)
 n_states = 2
 n_actions = 2
 
-all_population_size = 100 # number of random arms to generate
+all_population_size = 100 
 all_transitions = get_all_transitions(all_population_size)
 
 
@@ -118,22 +128,15 @@ def create_environment(seed):
     random.seed(seed)
     np.random.seed(seed)
 
-    if prob_distro == 'uniform':
-        match_probabilities = [np.random.random() for i in range(all_population_size * volunteers_per_arm)] 
-    elif prob_distro == 'uniform_small':
-        match_probabilities = [np.random.random()/4 for i in range(all_population_size * volunteers_per_arm)] 
-    elif prob_distro == 'uniform_large':
-        match_probabilities = [np.random.random()/4+0.75 for i in range(all_population_size * volunteers_per_arm)] 
-    elif prob_distro == 'normal':
-        match_probabilities = [np.clip(np.random.normal(0.25, 0.1),0,1) for i in range(all_population_size * volunteers_per_arm)] 
-
     all_features = np.arange(all_population_size)
-    match_probabilities = create_prob_distro(prob_distro,all_population_size*volunteers_per_arm)
-    match_probabilities = [np.random.randint(0,10) for i in range(all_population_size * volunteers_per_arm)] 
+    if reward_type == "set_cover":
+        match_probabilities = [set([random.randint(0,reward_parameters['universe_size']) for _ in range(random.randint(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']))]) for i in range(all_population_size*volunteers_per_arm)]
+    else:
+        match_probabilities = create_prob_distro(prob_distro,all_population_size*volunteers_per_arm)
 
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
                 n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='custom',match_probability_list=match_probabilities,TIME_PER_RUN=TIME_PER_RUN)
-
+    simulator.reward_type = reward_type 
     return simulator 
 
 
@@ -148,6 +151,7 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
 
     for seed in seed_list:
         simulator = create_environment(seed)
+
         if is_mcts:
             simulator.mcts_train_iterations = train_iterations
             simulator.mcts_test_iterations = test_iterations
@@ -207,7 +211,7 @@ if n_arms * volunteers_per_arm <= 4:
     per_epoch_function = q_iteration_custom_epoch()
     name = "optimal"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function,test_length=20)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
@@ -215,32 +219,10 @@ if n_arms * volunteers_per_arm <= 4:
     print(np.mean(rewards['reward']))
 
 # +
-policy = shapley_whittle_policy 
-name = "shapley_whittle"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
-
-# +
-policy = shapley_whittle_submodular_policy 
-name = "shapley_whittle_submodular"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
-
-# +
 policy = shapley_whittle_custom_policy 
 name = "shapley_whittle_custom"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=20)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -251,7 +233,7 @@ print(np.mean(rewards['reward']))
 policy = mcts_shapley_policy
 name = "mcts_shapley"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=20)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -262,7 +244,7 @@ np.mean(rewards['reward'])
 policy = mcts_shapley_attributions_policy
 name = "mcts_shapley_attribution"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=20)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']

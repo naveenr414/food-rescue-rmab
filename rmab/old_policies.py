@@ -7,9 +7,11 @@ from rmab.utils import get_stationary_distribution, binary_to_decimal, list_to_b
 from rmab.mcts_policies import run_mcts, two_step_idx_to_action
 from rmab.omniscient_policies import whittle_index, randomPolicy, whittle_greedy_policy
 from rmab.compute_whittle import get_init_bounds, get_q_vals, arm_value_v_iteration, q_iteration_epoch
+from rmab.dqn_policies import MLP
 import math 
 from itertools import combinations
 from sklearn.cluster import KMeans
+import gc 
 
 import torch
 import torch.nn as nn
