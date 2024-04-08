@@ -345,7 +345,7 @@ def one_hot(index,length):
     s[index] = 1
     return s
 
-def custom_reward(s,a,match_probabilities):
+def custom_reward(s,a,match_probabilities,custom_reward_type):
     """Custom defined submodular reward which is maximized by
         each policy
     
@@ -358,8 +358,6 @@ def custom_reward(s,a,match_probabilities):
             The set corresponding to each arm
     
     Returns: Float, reward"""
-
-    custom_reward_type = "set_cover"
 
     if custom_reward_type == "set_cover":
         num_elements = 10
@@ -400,4 +398,6 @@ def custom_reward(s,a,match_probabilities):
         str_state_action = ''.join([str(i) for i in str_state_action])
         val = value_by_combo[str_state_action]
 
-        return val   
+        return val 
+    else:
+        raise Exception("Reward type {} not found".format(custom_reward_type))  

@@ -3,7 +3,6 @@ import heapq
 
 from rmab.uc_whittle import Memoizer
 from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_v_iteration, get_q_vals, fast_arm_compute_whittle_multi_prob
-from rmab.utils import binary_to_decimal, custom_reward, one_hot
 from itertools import combinations
 from rmab.simulator import generate_random_context
 from rmab.omniscient_policies import whittle_index

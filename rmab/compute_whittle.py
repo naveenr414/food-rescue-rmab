@@ -72,7 +72,7 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
     # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
     return Q_func[state,:]
 
-def arm_value_iteration_exponential(all_transitions, discount, budget, volunteers_per_arm, threshold=value_iteration_threshold,reward_function='matching',lamb=0,power=None,match_probability_list=[]):
+def arm_value_iteration_exponential(all_transitions, discount, budget, volunteers_per_arm, reward_type,threshold=value_iteration_threshold,reward_function='matching',lamb=0,power=None,match_probability_list=[]):
     """ value iteration for a single arm at a time
 
     value iteration for the MDP defined by transitions with lambda-adjusted reward function
@@ -126,7 +126,7 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
         #return ((np.sum(match_probability_list*s*a)+1)**power-1)*(1-lamb) + lamb*np.sum(s)/len(s)
 
     def reward_custom(s,a):
-        val = custom_reward(s,a,match_probability_list)*(1-lamb) + lamb*np.sum(s)/len(s)
+        val = custom_reward(s,a,match_probability_list,reward_type)*(1-lamb) + lamb*np.sum(s)/len(s)
         return val 
 
     if reward_function == 'activity':

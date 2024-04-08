@@ -122,12 +122,12 @@ def shapley_index_custom(env,state,memoizer_shapley = {}):
 
     state = [int(i) for i in state]
 
-    scores = [custom_reward(state,combo,corresponding_probabilities) for combo in combinations]
+    scores = [custom_reward(state,combo,corresponding_probabilities,env.reward_type) for combo in combinations]
     scores = np.array(scores)
 
 
     for i in range(len(state_1)):
-        shapley_indices[state_1[i]] = np.mean([custom_reward(state,np.array([1 if idx == i else val for idx, val in enumerate(combo)]),corresponding_probabilities) - scores[j] for j,combo in enumerate(combinations) if combo[i] == 0])
+        shapley_indices[state_1[i]] = np.mean([custom_reward(state,np.array([1 if idx == i else val for idx, val in enumerate(combo)]),corresponding_probabilities,env.reward_type) - scores[j] for j,combo in enumerate(combinations) if combo[i] == 0])
 
     memoizer_shapley[state_str] = shapley_indices
 
@@ -182,7 +182,7 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     if memory == None:
         memoizer = Memoizer('optimal')
-        match_probs = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx]) for i in range(len(state))]
+        match_probs = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type) for i in range(len(state))]
     else:
         memoizer, match_probs = memory 
         
@@ -244,7 +244,7 @@ def q_iteration_epoch(env,lamb,reward_function='combined',power=None):
     discount = env.discount 
     budget = env.budget 
 
-    Q_vals = arm_value_iteration_exponential(true_transitions,discount,budget,env.volunteers_per_arm,
+    Q_vals = arm_value_iteration_exponential(true_transitions,discount,budget,env.volunteers_per_arm,env.reward_type,
                     reward_function=reward_function,power=power,lamb=lamb,
                     match_probability_list=match_probability)
 
