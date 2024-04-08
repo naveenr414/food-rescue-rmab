@@ -65,14 +65,11 @@ def delete_duplicate_results(folder_name,result_name,data):
     for file_name in all_results:
         load_file = json.load(open(file_name,"r"))
 
-        if "fce71a1c_43.json" in file_name:
-            print(load_file['parameters'],data['parameters'])
         if 'parameters' in load_file and load_file['parameters'] == data['parameters']:
-            print("File name {}".format(file_name))
-            # try:
-            #     os.remove(file_name)
-            # except OSError as e:
-            #     print(f"Error deleting {file_name}: {e}")
+            try:
+                os.remove(file_name)
+            except OSError as e:
+                print(f"Error deleting {file_name}: {e}")
 
 def get_results_matching_parameters(folder_name,result_name,parameters):
     """Get a list of dictionaries, with data, which match some set of parameters
@@ -347,28 +344,29 @@ def custom_reward(s,a,match_probabilities):
 
     # TODO: Uncomment everything 
     probs = s*a*match_probabilities
-    # value_by_combo = {
-    #     '0000': 0, 
-    #     '1000': probs[0], 
-    #     '0100': probs[1],
-    #     '0010': probs[2],
-    #     '0001': probs[3], 
-    #     '1100': max(probs[0],probs[1]), 
-    #     '1001': probs[0]+probs[3], 
-    #     '1010': max(probs[0],probs[2]),
-    #     '0110': max(probs[1],probs[2]), 
-    #     '0101': probs[1]+probs[3],
-    #     '0011': max(probs[2],probs[3]),
-    #     '0111': max(probs[1]+probs[3],probs[2]),
-    #     '1011': max(probs[0]+probs[3],probs[2]),
-    #     '1101': max(probs[0]+probs[3],probs[1]+probs[3]),
-    #     '1110': max(probs[0],max(probs[1],probs[2])),
-    #     '1111': max(max(probs[0],probs[1])+probs[3],probs[2])
-    # }
+    value_by_combo = {
+        '0000': 0, 
+        '1000': probs[0], 
+        '0100': probs[1],
+        '0010': probs[2],
+        '0001': probs[3], 
+        '1100': max(probs[0],probs[1]), 
+        '1001': probs[0]+probs[3], 
+        '1010': max(probs[0],probs[2]),
+        '0110': max(probs[1],probs[2]), 
+        '0101': probs[1]+probs[3],
+        '0011': max(probs[2],probs[3]),
+        '0111': max(probs[1]+probs[3],probs[2]),
+        '1011': max(probs[0]+probs[3],probs[2]),
+        '1101': max(probs[0]+probs[3],probs[1]+probs[3]),
+        '1110': max(probs[0],max(probs[1],probs[2])),
+        '1111': max(max(probs[0],probs[1])+probs[3],probs[2])
+    }
 
-    # str_state_action = s*a 
-    # str_state_action = ''.join([str(i) for i in str_state_action])
-    # val = value_by_combo[str_state_action]
+    str_state_action = s*a 
+    str_state_action = ''.join([str(i) for i in str_state_action])
+    val = value_by_combo[str_state_action]
 
-    # return val   
-    return np.max(probs)
+    return val   
+    # return np.max(probs)
+

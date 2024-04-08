@@ -900,7 +900,6 @@ class MonteCarloTreeSearchNode():
         current_rollout_state = self.state
         
         tick = 0
-        start = time.time()
         while not current_rollout_state.is_game_over():
             tick += 1
             possible_moves = current_rollout_state.get_legal_actions()
@@ -959,7 +958,6 @@ class MonteCarloTreeSearchNode():
                 best_child = curr_node.best_child(c_param=0.)
                 actions.append(best_child.parent_action)
                 curr_node = best_child 
-
         return actions 
     
     def __str__(self):
@@ -979,6 +977,7 @@ class StateAction():
         self.env = env 
         self.shapley = shapley 
         self.memory = None
+        self.attribution_method = "proportional"
 
     def get_legal_actions(self):
         idx = len(self.previous_state_actions)//self.budget*self.budget 
@@ -1022,12 +1021,8 @@ class StateAction():
         if self.shapley:
             assert self.max_rollout_actions == self.budget 
             memory_whittle, memory_shapley = self.memory 
-            memory_shapley_normalized = deepcopy(memory_shapley)
-            memory_shapley_normalized *= last_state*last_action 
-            if sum(memory_shapley_normalized) > 0:
-                memory_shapley_normalized /= np.sum(memory_shapley_normalized)
-            memory_shapley_normalized *= total_reward 
-            state_WI = whittle_index(self.env,last_state,self.budget,self.lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley,match_prob_now=memory_shapley_normalized)
+            match_prob_now = get_attributions(last_state,last_action,self.match_probs,self.lamb,memory_shapley,attribution_method=self.attribution_method)
+            state_WI = whittle_index(self.env,last_state,self.budget,self.lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley,match_prob_now=match_prob_now)
 
             total_reward = np.sum(np.array(state_WI)[last_action == 1])
             # state_WI = []
@@ -1055,34 +1050,13 @@ class StateAction():
         return total_reward
     
     def move(initial_state,action,transitions):
-        previous_state_actions = deepcopy(initial_state.previous_state_actions)
-        previous_state_actions.append((initial_state.current_state,action))
+        previous_state_actions = initial_state.previous_state_actions + [(initial_state.current_state,action)]
 
-        new_state_object = deepcopy(initial_state)
+        new_state_object = StateAction(initial_state.budget,initial_state.discount,initial_state.lamb,initial_state.current_state,initial_state.volunteers_per_arm,initial_state.n_arms,initial_state.match_probs,initial_state.max_rollout_actions,initial_state.env)
+        new_state_object.attribution_method = initial_state.attribution_method
         new_state_object.previous_state_actions = previous_state_actions
+        new_state_object.shapley = initial_state.shapley 
         new_state_object.memory = initial_state.memory 
-
-        # TODO: Add this back in
-
-        # if len(previous_state_actions)%new_state_object.budget == 0:
-        #     new_state = [0 for i in range(len(new_state_object.current_state))]
-        #     played_actions = [i[1] for i in previous_state_actions[-new_state_object.budget:]]
-        #     action_0_1 = [0 for i in range(len(new_state))]
-
-        #     for i in played_actions:
-        #         action_0_1[i] = 1
-
-        #     for i in range(new_state_object.n_arms):
-
-        #         for j in range(new_state_object.volunteers_per_arm):
-        #             idx = i*new_state_object.volunteers_per_arm + j
-        #             prob = transitions[i, new_state_object.current_state[idx], action_0_1[idx], :]
-        #             # a = random.random() 
-        #             a = 1
-        #             next_state = int(a>prob[0])
-        #             new_state[idx] = next_state
-        #     new_state_object.current_state = new_state
-        
         return new_state_object 
     
     def __str__(self):
@@ -1112,7 +1086,42 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
 
     return action, memory 
 
-def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+def get_attributions(state,action,match_probs,lamb,shapley_indices,attribution_method="proportional"):
+    """Detemrine how much reward to give to each action
+    
+    Arguments:  
+        state: Numpy array of length N, 0-1
+        action: Numpy array of length N, 0-1
+        match_probs: Marginal values for each arm
+        lamb: Float, balance between matching, engagement
+        shapley_indices: Computed impact of each arm"""
+
+    if attribution_method == "proportional":
+        reward = get_reward_custom(state,action,match_probs,lamb)
+        memory_shapley_normalized = shapley_indices*state*action 
+        if np.sum(memory_shapley_normalized) > 0:
+            memory_shapley_normalized /= np.sum(memory_shapley_normalized)
+        memory_shapley_normalized *= reward  
+        return memory_shapley_normalized
+    elif attribution_method == "shapley":
+        shapley_values = []
+        for i in range(len(action)):
+            if state[i]*action[i] == 0:
+                shapley_values.append(0)
+            else:
+                action_copy = deepcopy(action)
+                action_copy[i] = 0
+                reward_difference = get_reward_custom(state,action,match_probs,lamb)
+                reward_difference -= get_reward_custom(state,action_copy,match_probs,lamb)
+                shapley_values.append(reward_difference)
+        return np.array(shapley_values)
+    else:
+        raise Exception("Method {} not found".format(attribution_method))
+
+def mcts_shapley_attributions_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    return mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="shapley")
+
+def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
     N = len(state)
     rollout = budget
     match_probs = np.array(env.match_probability_list)[env.agent_idx]
@@ -1122,6 +1131,7 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
         memory = Memoizer('optimal'),np.array(shapley_index_custom(env,np.ones(len(env.agent_idx)),{})[0])
 
     s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env,shapley=True)
+    s.attribution_method = attribution_method 
     s.previous_state_actions = state_actions
     s.memory = memory 
     s.per_epoch_results = per_epoch_results
@@ -1131,8 +1141,17 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
 
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
+    match_prob_now = get_attributions(state,action,match_probs,lamb,memory[1],attribution_method=attribution_method)
+    computed_whittle = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1],match_prob_now=match_prob_now)
+    action_index =  np.sum(computed_whittle[action == 1])
 
-    shapley_action = shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_results)
+    shapley_action = shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_results)[0]
+    match_prob_now = get_attributions(state,shapley_action,match_probs,lamb,memory[1],attribution_method=attribution_method)
+    computed_whittle = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1],match_prob_now=match_prob_now)
+    shapley_action_index = np.sum(computed_whittle[shapley_action == 1])
+
+    if shapley_action_index > action_index:
+        action = shapley_action 
 
     return action, memory
 
