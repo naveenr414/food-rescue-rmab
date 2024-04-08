@@ -344,7 +344,7 @@ def fake_arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_br
     N = num_arms 
 
     if match_prob_now > match_prob:
-        return arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=lamb,match_prob=match_prob,num_arms=num_arms) + (match_prob_now-match_prob)*lamb
+        return arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=lamb,match_prob=match_prob,num_arms=num_arms) + (match_prob_now-match_prob)*(1-lamb)
     else:
         top = -((-1 + lamb)*(1 + a*discount)*N*match_prob_now) + c*discount* (-lamb + (-1 + lamb)*N*match_prob)+d*discount* (lamb + lamb* N*(match_prob_now - match_prob) + N*(-match_prob_now + match_prob))
         bottom = N*(1+a*discount-c*discount)

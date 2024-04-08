@@ -5,7 +5,7 @@ import heapq
 
 from rmab.uc_whittle import Memoizer
 from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, arm_value_v_iteration, get_q_vals, fake_arm_compute_whittle_multi_prob
-from rmab.utils import binary_to_decimal, custom_reward
+from rmab.utils import binary_to_decimal, custom_reward, one_hot
 from itertools import combinations
 from rmab.simulator import generate_random_context
 
@@ -55,7 +55,7 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
             check_set_val = memoizer.check_set(arm_transitions, state[i])
         else:
             if match_prob_now is not None: 
-                check_set_val = memoizer.check_set(arm_transitions+round(match_probability_list[i],4)+round(match_prob_now[i],4), state[i])
+                check_set_val = memoizer.check_set(arm_transitions+round(match_probability_list[i],4)+(round(match_prob_now[i],4) + 0.0001)*1000, state[i])
             else:
                 check_set_val = memoizer.check_set(arm_transitions+round(match_probability_list[i],4), state[i])
         if check_set_val != -1:
@@ -69,7 +69,7 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
                 memoizer.add_set(arm_transitions, state[i], state_WI[i])
             else:
                 if match_prob_now is not None:
-                    memoizer.add_set(arm_transitions+round(match_probability_list[i],4)+round(match_prob_now[i],4), state[i], state_WI[i])
+                    memoizer.add_set(arm_transitions+round(match_probability_list[i],4)+(round(match_prob_now[i],4) + 0.0001)*1000, state[i], state_WI[i])
                 else:
                     memoizer.add_set(arm_transitions+round(match_probability_list[i],4), state[i], state_WI[i])
     
@@ -349,16 +349,17 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     if memory == None:
         memoizer = Memoizer('optimal')
+        match_probs = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx]) for i in range(len(state))]
     else:
-        memoizer = memory 
+        memoizer, match_probs = memory 
         
-    state_WI = whittle_index(env,state,budget,lamb,memoizer)
+    state_WI = whittle_index(env,state,budget,lamb,memoizer,match_probs=match_probs)
 
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
     action[sorted_WI[:budget]] = 1
 
-    return action, memoizer 
+    return action, (memoizer,match_probs)  
 
 def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Whittle index policy based on computing the subsidy for each arm
@@ -1131,7 +1132,6 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
     combined_reward = global_reward*(1-lamb) + lamb*active_rate
     num_steps = 1
 
-    # TODO: Change this back
     step_size = len(global_reward[0])//num_steps
 
     for epoch in range(len(global_reward)):

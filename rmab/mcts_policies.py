@@ -954,6 +954,7 @@ class MonteCarloTreeSearchNode():
             if len(curr_node.children) == 0:
                 possible_values = curr_node.state.get_legal_actions()
                 actions += random.sample(possible_values,budget-i)
+                return actions 
             else:
                 best_child = curr_node.best_child(c_param=0.)
                 actions.append(best_child.parent_action)

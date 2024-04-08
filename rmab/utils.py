@@ -343,30 +343,42 @@ def custom_reward(s,a,match_probabilities):
     Returns: Float, reward"""
 
     # TODO: Uncomment everything 
-    probs = s*a*match_probabilities
-    value_by_combo = {
-        '0000': 0, 
-        '1000': probs[0], 
-        '0100': probs[1],
-        '0010': probs[2],
-        '0001': probs[3], 
-        '1100': max(probs[0],probs[1]), 
-        '1001': probs[0]+probs[3], 
-        '1010': max(probs[0],probs[2]),
-        '0110': max(probs[1],probs[2]), 
-        '0101': probs[1]+probs[3],
-        '0011': max(probs[2],probs[3]),
-        '0111': max(probs[1]+probs[3],probs[2]),
-        '1011': max(probs[0]+probs[3],probs[2]),
-        '1101': max(probs[0]+probs[3],probs[1]+probs[3]),
-        '1110': max(probs[0],max(probs[1],probs[2])),
-        '1111': max(max(probs[0],probs[1])+probs[3],probs[2])
-    }
+    all_nums = set([i for i in range(0,10)])
+    all_seen = set() 
+    for i in range(len(s)):
+        if s[i]*a[i] == 1:
+            all_seen = all_seen.union(match_probabilities[i])
+    
+    return len(all_nums.intersection(all_seen))
 
-    str_state_action = s*a 
-    str_state_action = ''.join([str(i) for i in str_state_action])
-    val = value_by_combo[str_state_action]
+    # probs = s*a*match_probabilities
+    # value_by_combo = {
+    #     '0000': 0, 
+    #     '1000': probs[0], 
+    #     '0100': probs[1],
+    #     '0010': probs[2],
+    #     '0001': probs[3], 
+    #     '1100': max(probs[0],probs[1]), 
+    #     '1001': probs[0]+probs[3], 
+    #     '1010': max(probs[0],probs[2]),
+    #     '0110': max(probs[1],probs[2]), 
+    #     '0101': probs[1]+probs[3],
+    #     '0011': max(probs[2],probs[3]),
+    #     '0111': max(probs[1]+probs[3],probs[2]),
+    #     '1011': max(probs[0]+probs[3],probs[2]),
+    #     '1101': max(probs[0]+probs[3],probs[1]+probs[3]),
+    #     '1110': max(probs[0],max(probs[1],probs[2])),
+    #     '1111': max(max(probs[0],probs[1])+probs[3],probs[2])
+    # }
 
-    return val   
+    # str_state_action = s*a 
+    # str_state_action = ''.join([str(i) for i in str_state_action])
+    # val = value_by_combo[str_state_action]
+
+    # return val   
     # return np.max(probs)
 
+def one_hot(index,length):
+    s = [0 for i in range(length)]
+    s[index] = 1
+    return s
