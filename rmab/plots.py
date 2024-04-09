@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt 
 import seaborn as sns
 import numpy as np
+from copy import deepcopy
 
 def plot_transition_dynamics(transitions):
     """Plot the transition dynamics, given a 2x2x2 matrix transitions
@@ -178,7 +179,6 @@ def aggregate_data(results):
         tuple with the mean and standard deviation"""
 
     ret_dict = {}
-    
     for l in results:
         for k in l:
             if type(l[k]) == int or type(l[k]) == float:
@@ -194,6 +194,38 @@ def aggregate_data(results):
         ret_dict[i] = (np.mean(ret_dict[i]),np.std(ret_dict[i]))
     
     return ret_dict 
+
+def aggregate_normalize_data(results):
+    """Get the average and standard deviation for each key across 
+        multiple trials; with each reward/etc. being averaged
+        
+    Arguments: 
+        results: List of dictionaries, one for each seed
+    
+    Returns: Dictionary, with each key mapping to a 
+        tuple with the mean and standard deviation"""
+
+    results_copy = deepcopy(results)
+
+    for data_point in results_copy:
+        avg_by_type = {}
+        for key in data_point:
+            if type(data_point[key]) == list and (type(data_point[key][0]) == int or type(data_point[key][0]) == float):
+                value = data_point[key][0]
+            elif type(data_point[key]) == int or type(data_point[key]) == float:
+                value = data_point[key]
+            else:
+                continue 
+            data_type = key.split("_")[-1]
+            if data_type not in avg_by_type:
+                avg_by_type[data_type] = []
+            avg_by_type[data_type].append(value)
+        for key in data_point:
+            data_type = key.split("_")[-1]
+            if data_type in avg_by_type:
+                data_point[key][0] -= float(np.mean(avg_by_type[data_type]))
+
+    return aggregate_data(results_copy)
 
 def plot_tradeoff_curve(data,names,nice_names,title):
     """Plot the matching vs. activity tradeoff curve

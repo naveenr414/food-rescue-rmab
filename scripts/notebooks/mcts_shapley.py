@@ -43,13 +43,13 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 43
+    seed        = 44
     n_arms      = 1
     volunteers_per_arm = 4
-    budget      = 4
+    budget      = 2
     discount    = 0.9
     alpha       = 3 
-    n_episodes  = 1
+    n_episodes  = 5
     episode_len = 20 
     n_epochs    = 1
     save_with_date = False 
@@ -57,7 +57,7 @@ if is_jupyter:
     lamb = 0
     prob_distro = 'uniform'
     reward_type = "set_cover"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 3, 'arm_set_high': 6}
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 15, 'arm_set_high': 20}
     policy_lr=5e-3
     value_lr=1e-4
     train_iterations = 30
@@ -68,9 +68,9 @@ else:
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
     parser.add_argument('--volunteers_per_arm',         '-V', help='volunteers per arm', type=int, default=5)
     parser.add_argument('--episode_len',    '-H', help='episode length', type=int, default=20)
-    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=1)
+    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=5)
     parser.add_argument('--budget',         '-B', help='budget', type=int, default=3)
-    parser.add_argument('--n_epochs',       '-E', help='number of epochs (num_repeats)', type=int, default=3)
+    parser.add_argument('--n_epochs',       '-E', help='number of epochs (num_repeats)', type=int, default=1)
     parser.add_argument('--discount',       '-d', help='discount factor', type=float, default=0.9)
     parser.add_argument('--alpha',          '-a', help='alpha: for conf radius', type=float, default=3)
     parser.add_argument('--lamb',          '-l', help='lambda for matching-engagement tradeoff', type=float, default=0.5)
@@ -132,11 +132,12 @@ def create_environment(seed):
     if reward_type == "set_cover":
         match_probabilities = [set([random.randint(0,reward_parameters['universe_size']) for _ in range(random.randint(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']))]) for i in range(all_population_size*volunteers_per_arm)]
     else:
-        match_probabilities = create_prob_distro(prob_distro,all_population_size*volunteers_per_arm)
+        match_probabilities = np.array(create_prob_distro(prob_distro,all_population_size*volunteers_per_arm))
 
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
                 n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='custom',match_probability_list=match_probabilities,TIME_PER_RUN=TIME_PER_RUN)
     simulator.reward_type = reward_type 
+    simulator.reward_parameters = reward_parameters 
     return simulator 
 
 
@@ -188,7 +189,12 @@ results['parameters'] = {'seed'      : seed,
         'time_per_run': TIME_PER_RUN, 
         'prob_distro': prob_distro, 
         'policy_lr': policy_lr, 
-        'value_lr': value_lr} 
+        'value_lr': value_lr, 
+        'reward_type': reward_type, 
+        'universe_size': reward_parameters['universe_size'],
+        'arm_set_low': reward_parameters['arm_set_low'], 
+        'arm_set_high': reward_parameters['arm_set_high'],
+        } 
 
 # ## Index Policies
 
@@ -198,7 +204,7 @@ seed_list = [seed]
 policy = whittle_policy
 name = "linear_whittle"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=20)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -211,7 +217,7 @@ if n_arms * volunteers_per_arm <= 4:
     per_epoch_function = q_iteration_custom_epoch()
     name = "optimal"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function,test_length=20)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function,test_length=n_episodes*episode_len)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
@@ -222,7 +228,7 @@ if n_arms * volunteers_per_arm <= 4:
 policy = shapley_whittle_custom_policy 
 name = "shapley_whittle_custom"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=20)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -233,7 +239,7 @@ print(np.mean(rewards['reward']))
 policy = mcts_shapley_policy
 name = "mcts_shapley"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=20)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=n_episodes*episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -244,7 +250,7 @@ np.mean(rewards['reward'])
 policy = mcts_shapley_attributions_policy
 name = "mcts_shapley_attribution"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=20)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=n_episodes*episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']

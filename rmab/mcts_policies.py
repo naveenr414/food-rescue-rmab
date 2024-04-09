@@ -30,8 +30,8 @@ def get_reward_max(state,action,match_probs,lamb):
     score = np.max(prod_state)
     return score*(1-lamb) + np.sum(state)/len(state)*lamb
 
-def get_reward_custom(state,action,match_probs,lamb,reward_type):
-    return custom_reward(state,action,match_probs,reward_type)*(1-lamb) + np.sum(state)/len(state)*lamb
+def get_reward_custom(state,action,match_probs,lamb,reward_type,reward_parameters):
+    return custom_reward(state,action,match_probs,reward_type,reward_parameters)*(1-lamb) + np.sum(state)/len(state)*lamb
 
 class MonteCarloTreeSearchNode():
     """Class which allows for MCTS to run
@@ -244,14 +244,14 @@ class StateAction():
                 else:
                     action_0_1.append(0)
             action_0_1 = np.array(action_0_1)
-            total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type)
+            total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters)
             last_state = corresponding_state
             last_action = action_0_1
 
         if self.shapley:
             assert self.max_rollout_actions == self.budget 
             memory_whittle, memory_shapley = self.memory 
-            match_prob_now = get_attributions(last_state,last_action,self.match_probs,self.lamb,memory_shapley,self.env.reward_type,attribution_method=self.attribution_method)
+            match_prob_now = get_attributions(last_state,last_action,self.match_probs,self.lamb,memory_shapley,self.env.reward_type,self.env.reward_parameters,attribution_method=self.attribution_method)
             state_WI = whittle_index(self.env,last_state,self.budget,self.lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley,match_prob_now=match_prob_now)
 
             total_reward = np.sum(np.array(state_WI)[last_action == 1])
@@ -364,12 +364,12 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
 
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
-    match_prob_now = get_attributions(state,action,match_probs,lamb,memory[1],env.reward_type,attribution_method=attribution_method)
+    match_prob_now = get_attributions(state,action,match_probs,lamb,memory[1],env.reward_type,env.reward_parameters,attribution_method=attribution_method)
     computed_whittle = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1],match_prob_now=match_prob_now)
     action_index =  np.sum(computed_whittle[action == 1])
 
     shapley_action = shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_results)[0]
-    match_prob_now = get_attributions(state,shapley_action,match_probs,lamb,memory[1],env.reward_type,attribution_method=attribution_method)
+    match_prob_now = get_attributions(state,shapley_action,match_probs,lamb,memory[1],env.reward_type,env.reward_parameters,attribution_method=attribution_method)
     computed_whittle = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1],match_prob_now=match_prob_now)
     shapley_action_index = np.sum(computed_whittle[shapley_action == 1])
 
@@ -382,7 +382,7 @@ def mcts_shapley_attributions_policy(env,state,budget,lamb,memory,per_epoch_resu
     """Use Shapley values for attributions in the mcts_shapley_policy"""
     return mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="shapley")
 
-def get_attributions(state,action,match_probs,lamb,shapley_indices,reward_type,attribution_method="proportional"):
+def get_attributions(state,action,match_probs,lamb,shapley_indices,reward_type,reward_parameters,attribution_method="proportional"):
     """Detemrine how much reward to give to each action
     
     Arguments:  
@@ -393,7 +393,7 @@ def get_attributions(state,action,match_probs,lamb,shapley_indices,reward_type,a
         shapley_indices: Computed impact of each arm"""
 
     if attribution_method == "proportional":
-        reward = get_reward_custom(state,action,match_probs,lamb,reward_type)
+        reward = get_reward_custom(state,action,match_probs,lamb,reward_type,reward_parameters)
         memory_shapley_normalized = shapley_indices*state*action 
         if np.sum(memory_shapley_normalized) > 0:
             memory_shapley_normalized /= np.sum(memory_shapley_normalized)
@@ -407,8 +407,8 @@ def get_attributions(state,action,match_probs,lamb,shapley_indices,reward_type,a
             else:
                 action_copy = deepcopy(action)
                 action_copy[i] = 0
-                reward_difference = get_reward_custom(state,action,match_probs,lamb,reward_type)
-                reward_difference -= get_reward_custom(state,action_copy,match_probs,lamb,reward_type)
+                reward_difference = get_reward_custom(state,action,match_probs,lamb,reward_type,reward_parameters)
+                reward_difference -= get_reward_custom(state,action_copy,match_probs,lamb,reward_type,reward_parameters)
                 shapley_values.append(reward_difference)
         return np.array(shapley_values)
     else:

@@ -343,9 +343,9 @@ def one_hot(index,length):
     Returns: List with length-1 0s and one 1 """
     s = [0 for i in range(length)]
     s[index] = 1
-    return s
+    return np.array(s)
 
-def custom_reward(s,a,match_probabilities,custom_reward_type):
+def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
     """Custom defined submodular reward which is maximized by
         each policy
     
@@ -360,7 +360,7 @@ def custom_reward(s,a,match_probabilities,custom_reward_type):
     Returns: Float, reward"""
 
     if custom_reward_type == "set_cover":
-        num_elements = 10
+        num_elements = reward_parameters['universe_size']
         all_nums = set([i for i in range(0,num_elements)])
         all_seen = set() 
         for i in range(len(s)):

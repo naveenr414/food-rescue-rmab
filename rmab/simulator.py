@@ -61,6 +61,7 @@ class RMABSimulator(gym.Env):
         self.power = None # For the submodular runs 
         self.avg_reward = 5
         self.reward_type = "probability"
+        self.reward_parameters = {}
 
         self.match_probability_list = np.array(self.match_probability_list)
 
@@ -177,7 +178,6 @@ class RMABSimulator(gym.Env):
             cohort_size: the number of arms to be initialized
             prob: the probability of sampling 0 (not engaging state)
         '''
-
         states = np.random.choice(a=self.number_states, size=cohort_size, p=[prob, 1-prob])
         return states
 
@@ -241,7 +241,7 @@ class RMABSimulator(gym.Env):
             if action is None:
                 return 0
             else:
-                return custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type)
+                return custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type,self.reward_parameters)
 
 def random_transition(all_population, n_states, n_actions):
     all_transitions = np.random.random((all_population, n_states, n_actions, n_states))
@@ -531,7 +531,7 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
 
     all_rewards = []
     combined_reward = global_reward*(1-lamb) + lamb*active_rate
-    num_steps = 1
+    num_steps = 5
 
     step_size = len(global_reward[0])//num_steps
 
