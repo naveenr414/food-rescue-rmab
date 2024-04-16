@@ -345,6 +345,23 @@ def one_hot(index,length):
     s[index] = 1
     return np.array(s)
 
+def one_hot_fixed(index,length,fixed):
+    """Create a list with length-1 0s, and a 1 at location index, and at 
+        some indices, fixed 
+        e.g. one_hot(3,5,[1,2]) = [0,1,1,1,0]
+
+    Arguments:
+        index: Integer, number, where the 1 is
+        length: Integer, number, length of the list 
+        fixed: List of integers, which we set to 1
+    
+    Returns: List with length-1 0s and one 1 """
+    s = np.array([0 for i in range(length)])
+    s[index] = 1
+    s[fixed] = 1
+    return s
+
+
 def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
     """Custom defined submodular reward which is maximized by
         each policy

@@ -271,7 +271,7 @@ def assert_valid_transition(transitions):
             # ensure acting is always good
             if transitions[i,s,1,1] < transitions[i,s,0,1]:
                 bad = True
-                print(f'acting should always be good! {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}')
+                print(f'acting should always be good! {i,s} {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}')
 
             # assert transitions[i,s,1,1] >= transitions[i,s,0,1] + 1e-6, f'acting should always be good! {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}'
 

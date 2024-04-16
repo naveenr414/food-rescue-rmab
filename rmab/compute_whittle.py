@@ -179,6 +179,93 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
         difference = np.abs(orig_value_func - value_func)
     return Q_func 
 
+def get_multi_Q(state,action,env,lamb,match_prob,match_prob_now):
+    """Compute the total reward (in terms of the Q value) given an action
+        And a set of match probabilities now/later
+        
+    Arguments: 
+        state: Numpy array list of 0-1
+        action: Numpy array list of 0-1
+        env: RMAB Simulator
+        lamb: Float, \lambda, tradeoff between engagement, global reward
+        match_prob: List of marginal global rewards
+        match_prob_now: List of marginal global rewards in the current time step
+        
+    Returns: Float, total Q value of playing action, given the environment structure"""
+
+    Q_values = []
+    for i in range(len(state)):
+        if state[i] == 1:
+            Q_fast_predicted = fast_Q_multi_prob(env.transitions[i//env.volunteers_per_arm,:,:,1], state[i], env.discount,lamb=lamb,
+            match_prob=match_prob[i],match_prob_now=match_prob_now[i],num_arms=len(state))
+            Q_values.append(Q_fast_predicted[action[i]])
+        else:
+            Q_fast_predicted = fast_Q(env.transitions[i//env.volunteers_per_arm,:,:,1], state[i], env.discount,lamb=lamb,
+            match_prob=match_prob[i],num_arms=len(state))
+            Q_values.append(Q_fast_predicted[action[i]])
+
+    return np.sum(Q_values)
+        
+def fast_Q(transitions, state, discount,lamb=0.5,match_prob=0.5,num_arms=1):
+    """Compute Q values by explicitly solving for the Q values (using Linear Algebra), rather  than running Value Iteration
+    
+    Arguments: 
+        transitions: 2x2 numpy array of transitions to the 1 state
+        state: 0-1 integer, which state one arm is in
+        predicted_subsidy: How much to penalize pulling an arm by
+        discount: How much to discount future rewards by, \gamma
+        lamb: How much to balance engagement vs. global reward
+        match_prob: Marginal reward to the global reward for pulling an arm
+        num_arms: Total numbers of arms
+        
+    Returns: Numpy array of the Q values"""
+    
+    a = transitions[0,0]
+    b = transitions[0,1]
+    c = transitions[1,0]
+    d = transitions[1,1]
+    g = discount 
+    q = match_prob 
+    N = num_arms 
+
+    if state == 0:
+        Q_val_0 = -((g*(a*(-1 + g) - b*g)*(-lamb + (-1 + lamb)*N*q))/((-1 + g)*(1 + b*g - d*g)*N))
+        Q_val_1 = (b*g*(-lamb + (-1 + lamb)*N*q))/((-1 + g)*(1 + b*g - d*g)*N)
+    else:
+        Q_val_0 = (lamb*(-1 + g*(1 - b + d + c (-1 + g) - d*g)) + (-1 + lamb)*g (c + b*g - c*g)*N*q)/((-1 + g)*(1 + b*g - d*g)*N)
+        Q_val_1 = ((1 + (-1 + b)*g)*(-lamb + (-1 + lamb)*N*q))/((-1 + g)*(1 + b*g - d*g)*N)
+
+    return np.array([Q_val_0,Q_val_1])
+
+def fast_Q_multi_prob(transitions, state, discount, lamb=0.5,match_prob=0.5,match_prob_now=1,num_arms=1):
+    """Compute Q values by explicitly solving for the Q values (using Linear Algebra), rather  than running Value Iteration
+    
+    Arguments: 
+        transitions: 2x2 numpy array of transitions to the 1 state
+        state: 0-1 integer, which state one arm is in
+        predicted_subsidy: How much to penalize pulling an arm by
+        discount: How much to discount future rewards by, \gamma
+        lamb: How much to balance engagement vs. global reward
+        match_prob: Marginal reward to the global reward for pulling an arm
+        match_prob_now: Marginal reward in the current state for pulling an arm
+        num_arms: Total numbers of arms
+        
+    Returns: Numpy array of the Q values"""
+
+    a = transitions[0,0]
+    b = transitions[0,1]
+    c = transitions[1,0]
+    d = transitions[1,1]
+    g = discount 
+    p = match_prob_now 
+    q = match_prob 
+    N = num_arms 
+    assert state == 1
+
+    Q_val_0 = (lamb*(-1 + g*(1 - b + d + c*(-1 + g) - d*g)) + (-1 + lamb)*g*(c + b*g - c*g)*N*q)/((-1 + g)*(1 + b*g - d*g)*N)
+    Q_val_1 = (1/((-1 + g)*(1 + b*g - d*g)*N))*((-1 + g)*(1 + b*g - d*g)*N*p - g*(d + b*g - d*g)*N*q + lamb*(-1 + N*p + g*(1 - b + (-1 + b + d*(-1 + g) - b*g)*N*p + (d + b*g - d*g)*N*q)))
+    return np.array([Q_val_0,Q_val_1])
+
 def Q_multi_prob(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='combined',lamb=0.5,
                         match_prob=0.5,match_prob_now=1,num_arms=1):
     """Value iteration when initial and subsequent rewards differ
