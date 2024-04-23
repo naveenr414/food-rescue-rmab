@@ -29,7 +29,7 @@ import secrets
 
 from rmab.simulator import RMABSimulator, run_heterogenous_policy, get_discounted_reward
 from rmab.omniscient_policies import *
-from rmab.fr_dynamics import get_all_transitions
+from rmab.fr_dynamics import get_all_transitions, get_db_data 
 from rmab.compute_whittle import arm_compute_whittle_multi_prob
 from rmab.mcts_policies import *
 from rmab.utils import get_save_path, delete_duplicate_results, create_prob_distro
@@ -44,9 +44,9 @@ is_jupyter = 'ipykernel' in sys.modules
 # +
 if is_jupyter: 
     seed        = 42
-    n_arms      = 2
-    volunteers_per_arm = 5
-    budget      = 2
+    n_arms      = 10
+    volunteers_per_arm = 1
+    budget      = 10
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 1
@@ -55,8 +55,8 @@ if is_jupyter:
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
     lamb = 0
-    prob_distro = 'uniform'
-    reward_type = "set_cover"
+    prob_distro = 'food_rescue'
+    reward_type = "probability"
     reward_parameters = {'universe_size': 20, 'arm_set_low': 8, 'arm_set_high': 10}
     policy_lr=5e-3
     value_lr=1e-4
@@ -75,8 +75,8 @@ else:
     parser.add_argument('--alpha',          '-a', help='alpha: for conf radius', type=float, default=3)
     parser.add_argument('--lamb',          '-l', help='lambda for matching-engagement tradeoff', type=float, default=0.5)
     parser.add_argument('--universe_size', help='For set cover, total num unvierse elems', type=int, default=10)
-    parser.add_argument('--arm_set_low', help='Least size of arm set, for set cover', type=int, default=3)
-    parser.add_argument('--arm_set_high', help='Largest size of arm set, for set cover', type=int, default=6)
+    parser.add_argument('--arm_set_low', help='Least size of arm set, for set cover', type=float, default=3)
+    parser.add_argument('--arm_set_high', help='Largest size of arm set, for set cover', type=float, default=6)
     parser.add_argument('--reward_type',          '-r', help='Which type of custom reward', type=str, default='set_cover')
     parser.add_argument('--seed',           '-s', help='random seed', type=int, default=42)
     parser.add_argument('--prob_distro',           '-p', help='which prob distro [uniform,uniform_small,uniform_large,normal]', type=str, default='uniform')
@@ -123,16 +123,30 @@ n_actions = 2
 all_population_size = 100 
 all_transitions = get_all_transitions(all_population_size)
 
+if prob_distro == "food_rescue":
+    probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
+    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
+    probs_by_num = {}
+    for i in rescues_by_user:
+        if str(i) in probs_by_user and probs_by_user[str(i)] > 0:
+            if len(rescues_by_user[i]) not in probs_by_num:
+                probs_by_num[len(rescues_by_user[i])] = []
+            probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
+
 
 def create_environment(seed):
     random.seed(seed)
     np.random.seed(seed)
 
     all_features = np.arange(all_population_size)
+    N = all_population_size*volunteers_per_arm
     if reward_type == "set_cover":
-        match_probabilities = [set([random.randint(0,reward_parameters['universe_size']) for _ in range(random.randint(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']))]) for i in range(all_population_size*volunteers_per_arm)]
+        set_sizes = [np.random.poisson(int(reward_parameters['arm_set_low'])) for i in range(N)]
+        match_probabilities = [set([np.random.randint(0,reward_parameters['universe_size']) for _ in range(set_sizes[i])]) for i in range(N)]
+    elif prob_distro == "food_rescue":
+        match_probabilities = [np.random.choice(probs_by_num[(i+2*volunteers_per_arm)//volunteers_per_arm]) for i in range(N)] 
     else:
-        match_probabilities = np.array(create_prob_distro(prob_distro,all_population_size*volunteers_per_arm))
+        match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
 
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
                 n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='custom',match_probability_list=match_probabilities,TIME_PER_RUN=TIME_PER_RUN)
@@ -201,8 +215,52 @@ results['parameters'] = {'seed'      : seed,
 seed_list = [seed]
 
 # +
+policy = greedy_policy
+name = "greedy"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = random_policy
+name = "random"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = whittle_activity_policy
+name = "whittle_activity"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
 policy = whittle_policy
 name = "linear_whittle"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
+policy = whittle_greedy_policy
+name = "greedy_whittle"
 
 rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
@@ -245,17 +303,18 @@ results['{}_match'.format(name)] =  rewards['match']
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
 np.mean(rewards['reward'])
+# -
 
-# +
-policy = whittle_iterative_policy
-name = "iterative_whittle"
+if n_arms * volunteers_per_arm <= 10:
+    policy = whittle_iterative_policy
+    name = "iterative_whittle"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-np.mean(rewards['reward'])
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    np.mean(rewards['reward'])
 
 # +
 policy = greedy_whittle_iterative_policy
@@ -267,18 +326,18 @@ results['{}_match'.format(name)] =  rewards['match']
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
 np.mean(rewards['reward'])
-
-# +
-policy = shapley_whittle_iterative_policy
-name = "shapley_iterative_whittle"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=n_episodes*episode_len)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-np.mean(rewards['reward'])
 # -
+
+if n_arms * volunteers_per_arm <= 10:
+    policy = shapley_whittle_iterative_policy
+    name = "shapley_iterative_whittle"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=n_episodes*episode_len)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    np.mean(rewards['reward'])
 
 # ## Write Data
 

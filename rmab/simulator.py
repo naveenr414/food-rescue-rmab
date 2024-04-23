@@ -531,7 +531,7 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
 
     all_rewards = []
     combined_reward = global_reward*(1-lamb) + lamb*active_rate
-    num_steps = 5
+    num_steps = 1
 
     step_size = len(global_reward[0])//num_steps
 

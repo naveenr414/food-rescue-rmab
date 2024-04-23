@@ -209,6 +209,7 @@ def aggregate_normalize_data(results):
 
     for data_point in results_copy:
         avg_by_type = {}
+        linear_whittle_results = {}
         for key in data_point:
             if type(data_point[key]) == list and (type(data_point[key][0]) == int or type(data_point[key][0]) == float):
                 value = data_point[key][0]
@@ -217,13 +218,13 @@ def aggregate_normalize_data(results):
             else:
                 continue 
             data_type = key.split("_")[-1]
-            if data_type not in avg_by_type:
-                avg_by_type[data_type] = []
-            avg_by_type[data_type].append(value)
+            if data_type not in avg_by_type and key == "linear_whittle_{}".format(data_type):
+                avg_by_type[data_type] = data_point[key][0]
+            # avg_by_type[data_type].append(value)
         for key in data_point:
             data_type = key.split("_")[-1]
             if data_type in avg_by_type:
-                data_point[key][0] -= float(np.mean(avg_by_type[data_type]))
+                data_point[key][0] -= float(avg_by_type[data_type])
 
     return aggregate_data(results_copy)
 

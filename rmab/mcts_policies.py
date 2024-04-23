@@ -52,7 +52,7 @@ class MonteCarloTreeSearchNode():
         self.use_whittle = use_whittle
         self.memoizer = memoizer
         self.simulation_no = simulation_no
-        return
+        self.use_max = False 
 
     def untried_actions(self):
         self._untried_actions = self.state.get_legal_actions()
@@ -71,7 +71,10 @@ class MonteCarloTreeSearchNode():
         if self.is_terminal_node():
             return np.mean(self._results)*self._number_of_visits
         else:
-            return np.max(list(self.results_children.values()))*self._number_of_visits
+            if self.use_max:
+                return np.max(list(self.results_children.values()))*self._number_of_visits
+            else:
+                return np.mean(self._results)*self._number_of_visits
 
     def n(self):
         return self._number_of_visits
@@ -126,10 +129,13 @@ class MonteCarloTreeSearchNode():
             self._results.append(result)
             result = np.mean(self._results)
         else:
-            if action in self.results_children:
-                self.results_children[action] = max(result,self.results_children[action])
+            if self.use_max:
+                if action in self.results_children:
+                    self.results_children[action] = max(result,self.results_children[action])
+                else:
+                    self.results_children[action] = result 
             else:
-                self.results_children[action] = result 
+                self._results.append(result)
         if self.parent:
             self.parent.backpropagate(result,self.parent_action)
 
@@ -237,28 +243,21 @@ class StateAction():
             Use this to compute the Whittle Index"""
 
         last_state = []
-        memory_whittle, memory_shapley = self.memory 
+        memory_shapley = self.memory[1]
 
         # Compute the State, Arms Played, and immideate marginal rewards
         state_choices = self.previous_state_actions
         corresponding_actions = [i[1] for i in state_choices]
         last_state = np.array(state_choices[0][0])
-        action_0_1 = []
+        last_action = []
         for arm in range(len(last_state)):
             if arm in corresponding_actions:
-                action_0_1.append(1)
+                last_action.append(1)
             else:
-                action_0_1.append(0)
-        action_0_1 = np.array(action_0_1)
-        match_prob_now = get_attributions(last_state,action_0_1,self.match_probs,self.lamb,memory_shapley,self.env.reward_type,self.env.reward_parameters,attribution_method=self.attribution_method)
-        
-        # Compute the Action based on the Whittle Index, and the Corresponding Q Values 
-        state_WI = whittle_index(self.env,last_state,self.budget,self.lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley,match_prob_now=match_prob_now)
-        sorted_WI = np.argsort(state_WI)[::-1]
-        whittle_action = np.zeros(len(state_WI), dtype=np.int8)
-        whittle_action[sorted_WI[:self.budget]] = 1
-        arm_q = get_multi_Q(last_state,whittle_action,self.env,self.lamb,memory_shapley,match_prob_now)
-
+                last_action.append(0)
+        last_action = np.array(last_action)
+        match_prob_now = get_attributions(last_state,last_action,self.match_probs,self.lamb,memory_shapley,self.env.reward_type,self.env.reward_parameters,attribution_method=self.attribution_method)
+        arm_q = get_multi_Q(last_state,last_action,self.env,self.lamb,memory_shapley,match_prob_now)
         return arm_q
     
     def move(initial_state,action):
@@ -365,25 +364,16 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
     root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions)
     selected_idx = root.best_action(budget)
     memory = s.memory 
-    arms_to_pull = np.zeros(N, dtype=np.int8)
-    arms_to_pull[selected_idx] = 1
-    match_prob_now = get_attributions(state,arms_to_pull,match_probs,lamb,memory[1],env.reward_type,env.reward_parameters,attribution_method=attribution_method)
-    
-    state_WI = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1],match_prob_now=match_prob_now)
-    sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
-    action[sorted_WI[:budget]] = 1
-    action_index = get_multi_Q(state,action,env,lamb,memory[1],match_prob_now)
+    action[selected_idx] = 1
+    match_prob_now = get_attributions(state,action,match_probs,lamb,memory[1],env.reward_type,env.reward_parameters,attribution_method=attribution_method)
+    q_value = get_multi_Q(state,action,env,lamb,memory[1],match_prob_now)
 
     shapley_action = shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_results)[0]
     match_prob_now = get_attributions(state,shapley_action,match_probs,lamb,memory[1],env.reward_type,env.reward_parameters,attribution_method=attribution_method)
-    state_WI = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1],match_prob_now=match_prob_now)
-    sorted_WI = np.argsort(state_WI)[::-1]
-    shapley_action = np.zeros(N, dtype=np.int8)
-    shapley_action[sorted_WI[:budget]] = 1
-    shapley_action_index = get_multi_Q(state,shapley_action,env,lamb,memory[1],match_prob_now)
+    shapley_q_value = get_multi_Q(state,shapley_action,env,lamb,memory[1],match_prob_now)
 
-    if shapley_action_index > action_index:
+    if shapley_q_value > q_value:
         action = shapley_action 
     
     return action, memory

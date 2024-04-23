@@ -321,7 +321,7 @@ def greedy_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_resul
     pulled_arms = []
 
     for _ in range(budget):
-        match_probability_list = [custom_reward(one_hot_fixed(i,len(state),pulled_arms),one_hot_fixed(i,len(state),pulled_arms),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
+        match_probability_list = np.array([custom_reward(one_hot_fixed(i,len(state),pulled_arms),one_hot_fixed(i,len(state),pulled_arms),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))])
         state_WI = whittle_index(env,state,budget,lamb,memoizer,match_probs=match_probability_list,reward_function="activity")
         state_WI *= lamb 
         state_WI += (1-lamb)*match_probability_list
@@ -511,8 +511,7 @@ def greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
     N = len(state)
 
     score_by_agent = [0 for i in range(N)]
-    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
-
+    match_probabilities = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
     for i in range(N):
         activity_score = np.sum(state)
         
@@ -549,7 +548,7 @@ def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
     state_WI = whittle_index(env,state,budget,lamb,memoizer,reward_function="activity")
     state_WI*=lamb 
 
-    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]*state
+    match_probabilities = np.array([custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))])
 
     state_WI += (1-lamb)*match_probabilities
 
