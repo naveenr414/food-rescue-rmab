@@ -10,9 +10,9 @@ do
     do 
         seed=$((${session}+${start_seed}))
         echo ${seed}
-        for universe_size in 10 # 20 50 100
+        for universe_size in 10 20 50 100
         do 
-            for arm_factor in 0.125 # 0.25 0.5 
+            for arm_factor in 0.125 0.25 0.5 
             do 
                 arm_size=$(echo "${universe_size}*${arm_factor}" | bc)
                 arm_size=$(printf "%.0f" $arm_size)

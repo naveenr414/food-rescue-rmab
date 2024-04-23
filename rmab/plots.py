@@ -195,7 +195,7 @@ def aggregate_data(results):
     
     return ret_dict 
 
-def aggregate_normalize_data(results):
+def aggregate_normalize_data(results,baseline=None):
     """Get the average and standard deviation for each key across 
         multiple trials; with each reward/etc. being averaged
         
@@ -218,7 +218,9 @@ def aggregate_normalize_data(results):
             else:
                 continue 
             data_type = key.split("_")[-1]
-            if data_type not in avg_by_type and key == "linear_whittle_{}".format(data_type):
+            if baseline == None:
+                baseline = "linear_whittle"
+            if data_type not in avg_by_type and key == "{}_{}".format(baseline,data_type):
                 avg_by_type[data_type] = data_point[key][0]
             # avg_by_type[data_type].append(value)
         for key in data_point:
