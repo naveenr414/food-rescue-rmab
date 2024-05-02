@@ -10,14 +10,25 @@ do
     do 
         seed=$((${session}+${start_seed}))
         echo ${seed}
-        for universe_size in 10 20 50 100
+        # for universe_size in 10 20 50 100
+        # do 
+        #     for arm_factor in 0.125 0.25 0.5 
+        #     do 
+        #         arm_size=$(echo "${universe_size}*${arm_factor}" | bc)
+        #         arm_size=$(printf "%.0f" $arm_size)
+        #         tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms 10 --lamb 0.5 --budget 5 --reward_type set_cover --universe_size ${universe_size} --arm_set_low ${arm_size} --out_folder reward_variation/subset_reward" ENTER
+        #     done 
+        # done 
+
+        # for arm_size in 1 2 4 8 10
+        # do 
+        #     tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms 10 --lamb 0.5 --budget 2 --reward_type set_cover --prob_distro fixed --universe_size 20 --arm_set_low ${arm_size} --out_folder reward_variation/subset_reward" ENTER
+        # done 
+
+        for arm_size in 1 2 4 8 10
         do 
-            for arm_factor in 0.125 0.25 0.5 
-            do 
-                arm_size=$(echo "${universe_size}*${arm_factor}" | bc)
-                arm_size=$(printf "%.0f" $arm_size)
-                tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms 10 --lamb 0.5 --budget 5 --reward_type set_cover --universe_size ${universe_size} --arm_set_low ${arm_size} --out_folder reward_variation/subset_reward" ENTER
-            done 
+            tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms 10 --lamb 0.5 --budget 5 --reward_type set_cover --prob_distro fixed --universe_size 20 --arm_set_low ${arm_size} --out_folder reward_variation/subset_reward" ENTER
         done 
+
     done 
 done 

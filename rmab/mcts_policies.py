@@ -2,7 +2,7 @@ import numpy as np
 import random 
 
 from rmab.uc_whittle import Memoizer
-from rmab.omniscient_policies import whittle_index, shapley_index_custom, shapley_whittle_custom_policy
+from rmab.omniscient_policies import whittle_index, shapley_index_custom, shapley_whittle_custom_policy, random_policy
 from rmab.utils import custom_reward, binary_to_decimal, list_to_binary
 from rmab.compute_whittle import get_multi_Q
 
@@ -111,8 +111,7 @@ class MonteCarloTreeSearchNode():
         while not current_rollout_state.is_game_over():
             possible_moves = current_rollout_state.get_legal_actions()
             action = self.rollout_policy(possible_moves)
-            current_rollout_state = current_rollout_state.move(action)        
-
+            current_rollout_state = current_rollout_state.move(action) 
         return current_rollout_state.game_result()
 
     def backpropagate(self, result,action=None):
@@ -170,7 +169,6 @@ class MonteCarloTreeSearchNode():
         Arguments: Float, budget, maximum number of arms to pull
         
         Returns: List of pulled arms, of length budget"""
-
         simulation_no = self.simulation_no
         for i in range(simulation_no):
             v = self._tree_policy()
@@ -196,7 +194,7 @@ class StateAction():
     """Class which abstracts out the game specifics
     Covers the reward and updates the arms pulled so far"""
 
-    def __init__(self,budget,discount,lamb,initial_state,volunteers_per_arm,n_arms,match_probs,max_rollout_actions,env,shapley=False):
+    def __init__(self,budget,discount,lamb,initial_state,volunteers_per_arm,n_arms,match_probs,max_rollout_actions,env,shapley=False,use_raw_reward=False):
         self.budget = budget 
         self.discount = discount 
         self.lamb = lamb  
@@ -210,6 +208,7 @@ class StateAction():
         self.shapley = shapley 
         self.memory = None
         self.attribution_method = "proportional"
+        self.use_raw_reward = use_raw_reward
 
     def get_legal_actions(self):
         """Find all the arms pulled, and make sure no duplicate arms are pulled
@@ -257,6 +256,23 @@ class StateAction():
                 last_action.append(0)
         last_action = np.array(last_action)
         match_prob_now = get_attributions(last_state,last_action,self.match_probs,self.lamb,memory_shapley,self.env.reward_type,self.env.reward_parameters,attribution_method=self.attribution_method)
+        
+        if self.use_raw_reward:
+            total_reward = 0
+            for i in range(self.max_rollout_actions//self.budget):
+                state_choices = self.previous_state_actions[i*self.budget:(i+1)*self.budget]
+                corresponding_actions = [i[1] for i in state_choices]
+                corresponding_state = np.array(state_choices[0][0])
+                action_0_1 = []
+                for arm in range(len(corresponding_state)):
+                    if arm in corresponding_actions:
+                        action_0_1.append(1)
+                    else:
+                        action_0_1.append(0)
+                action_0_1 = np.array(action_0_1)
+                total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters)
+            return total_reward 
+        
         arm_q = get_multi_Q(last_state,last_action,self.env,self.lamb,memory_shapley,match_prob_now)
         return arm_q
     
@@ -271,10 +287,28 @@ class StateAction():
         previous_state_actions = initial_state.previous_state_actions + [(initial_state.current_state,action)]
 
         new_state_object = StateAction(initial_state.budget,initial_state.discount,initial_state.lamb,initial_state.current_state,initial_state.volunteers_per_arm,initial_state.n_arms,initial_state.match_probs,initial_state.max_rollout_actions,initial_state.env)
+        new_state_object.use_raw_reward = initial_state.use_raw_reward
         new_state_object.attribution_method = initial_state.attribution_method
         new_state_object.previous_state_actions = previous_state_actions
         new_state_object.shapley = initial_state.shapley 
         new_state_object.memory = initial_state.memory 
+
+        if len(previous_state_actions)%new_state_object.budget == 0 and initial_state.max_rollout_actions > initial_state.budget:
+            new_state = [0 for i in range(len(new_state_object.current_state))]
+            played_actions = [i[1] for i in previous_state_actions[-new_state_object.budget:]]
+            action_0_1 = [0 for i in range(len(new_state))]
+
+            for i in played_actions:
+                action_0_1[i] = 1
+
+            for i in range(new_state_object.n_arms):
+                for j in range(new_state_object.volunteers_per_arm):
+                    idx = i*new_state_object.volunteers_per_arm + j
+                    prob = initial_state.env.transitions[i, new_state_object.current_state[idx], action_0_1[idx], :]
+                    next_state = int(random.random()>prob[0])
+                    new_state[idx] = next_state
+            new_state_object.current_state = new_state
+
         return new_state_object 
     
     def __str__(self):
@@ -295,23 +329,21 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
     
     Returns: Action, 0-1 list"""
     
+    if env.is_training:
+        return random_policy(env,state,budget,lamb,memory, per_epoch_results)
     N = len(state)
-    rollout = budget
+    rollout = budget*env.mcts_depth
+
     match_probs = np.array(env.match_probability_list)[env.agent_idx]
     state_actions = []
     if memory == None:
         memory = Memoizer('optimal'),np.array(shapley_index_custom(env,np.ones(len(env.agent_idx)),{})[0])
 
-    for _ in range(budget):
-        s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env)
-        s.previous_state_actions = state_actions
-        s.memory = memory 
-        root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,use_whittle=use_whittle)
-        selected_node = root.best_action()
-        state_actions = selected_node.state.previous_state_actions
-        memory = s.memory 
-
-    selected_idx = [i[1] for i in state_actions]
+    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env,use_raw_reward=True)
+    s.memory = memory 
+    root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,use_whittle=use_whittle)
+    selected_idx = root.best_action(budget)
+    memory = s.memory 
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
 

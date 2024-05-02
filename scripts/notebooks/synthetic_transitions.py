@@ -28,7 +28,7 @@ import sys
 import secrets
 from itertools import combinations
 
-from rmab.simulator import RMABSimulator, run_heterogenous_policy, get_discounted_reward
+from rmab.simulator import RMABSimulator, run_heterogenous_policy, get_discounted_reward, create_random_transitions
 from rmab.omniscient_policies import *
 from rmab.fr_dynamics import get_all_transitions, get_db_data 
 from rmab.compute_whittle import arm_compute_whittle_multi_prob
@@ -58,12 +58,13 @@ if is_jupyter:
     lamb = 0
     prob_distro = 'fixed'
     reward_type = "set_cover"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 1, 'arm_set_high': 1}
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 10, 'arm_set_high': 10}
     policy_lr=5e-3
     value_lr=1e-4
     train_iterations = 30
     test_iterations = 30
     out_folder = 'iterative'
+    max_transition_prob = 1.0
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
@@ -86,6 +87,8 @@ else:
     parser.add_argument('--value_lr', help='Learning Rate Value', type=float, default=1e-4)
     parser.add_argument('--train_iterations', help='Number of MCTS train iterations', type=int, default=30)
     parser.add_argument('--test_iterations', help='Number of MCTS test iterations', type=int, default=30)
+    parser.add_argument('--max_prob', help='Maximum probability of transition', type=float, default=1)
+
     parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='iterative')
 
     parser.add_argument('--use_date', action='store_true')
@@ -110,6 +113,7 @@ else:
     out_folder = args.out_folder
     train_iterations = args.train_iterations 
     test_iterations = args.test_iterations 
+    max_transition_prob = args.max_prob
     reward_type = args.reward_type
     reward_parameters = {'universe_size': args.universe_size,
                         'arm_set_low': args.arm_set_low, 
@@ -122,7 +126,7 @@ n_states = 2
 n_actions = 2
 
 all_population_size = 100 
-all_transitions = get_all_transitions(all_population_size)
+all_transitions = create_random_transitions(all_population_size,max_transition_prob)
 
 if prob_distro == "food_rescue":
     probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
@@ -218,6 +222,7 @@ results['parameters'] = {'seed'      : seed,
         'universe_size': reward_parameters['universe_size'],
         'arm_set_low': reward_parameters['arm_set_low'], 
         'arm_set_high': reward_parameters['arm_set_high'],
+        'max_prob': max_transition_prob, 
         } 
 
 # ## Index Policies
@@ -271,19 +276,13 @@ print(np.mean(rewards['reward']))
 
 if prob_distro == "fixed":
     match_probs = simulator.match_probability_list[simulator.agent_idx]
-
     avg_combo_ratio = []
-
-
     for i in combinations(match_probs,budget):
         s = set()
         for j in i:
             s = s.union(j)
         avg_combo_ratio.append(len(s)/sum([len(j) for j in i]))
-
     results['ratio'] = np.mean(avg_combo_ratio)
-    print(results['ratio'])
-
 
 # +
 policy = whittle_greedy_policy

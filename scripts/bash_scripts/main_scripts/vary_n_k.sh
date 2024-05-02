@@ -25,5 +25,14 @@ do
         do 
             tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms 10 --lamb ${lamb} --budget 5 --reward_type max --arm_set_low 0 --arm_set_high 1 --out_folder n_k_variation" ENTER
         done 
+
+        for volunteers in 15 20 
+        do 
+            echo ${volunteers}
+            budget_frac=0.25 
+            budget=$(echo "${volunteers}*${budget_frac}" | bc)
+            budget=$(printf "%.0f" $budget)
+            tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${volunteers} --lamb 0.5 --budget ${budget} --reward_type max --arm_set_low 0 --arm_set_high 1 --out_folder n_k_variation" ENTER
+        done 
     done 
 done 

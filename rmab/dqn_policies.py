@@ -237,6 +237,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     
     value_lr = env.value_lr 
     train_epochs = env.train_epochs
+
     N = len(state) 
     match_probs = np.array(env.match_probability_list)[env.agent_idx]
     epsilon = 0.01
@@ -289,7 +290,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     current_epoch += 1
 
     if current_epoch < train_epochs:
-         if len(past_states) > batch_size+2:
+        if len(past_states) > batch_size+2:
             start = time.time() 
             random_memories = random.sample(list(range(len(past_states)-2)),batch_size)
             sample_state = np.array(past_states)[random_memories]
@@ -334,7 +335,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     # Update the target model
     if current_epoch < train_epochs and current_epoch % target_update_freq == 0:
         for target_param, local_param in zip(target_model.parameters(), q_network.parameters()):
-                target_param.data.copy_(tau*local_param.data+(1-tau)*target_param.data)
+            target_param.data.copy_(tau*local_param.data+(1-tau)*target_param.data)
     target_model = target_model.eval() 
     
     # # Compute the best action
@@ -365,10 +366,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     for _ in range(budget):
         past_final_actions.append(final_action)
 
-    if use_max:
-        rew = get_reward_max(state,action,match_probs,lamb)
-    else:
-        rew = get_reward(state,action,match_probs,lamb)
+    rew = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters)
 
     for i in range(budget):
         past_rewards.append(rew)

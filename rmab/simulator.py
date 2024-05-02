@@ -385,6 +385,28 @@ def synthetic_transition_small_window(all_population, n_states, n_actions, low, 
 
     return full_transitions
 
+def create_random_transitions(num_transitions,max_prob):
+    """Create a matrix with a set of random transitions for N agents
+    
+    Arguments:
+        num_transitions: How many sets of random transition matrices to creaet
+        max_prob: Maximum value of T_{0,0,1}
+    
+    Returns: Transition matrix, numpy array of size (num_transitions,2,2,2)"""
+    
+    transition_list = np.zeros((num_transitions,2,2,2))
+
+    for i in range(len(transition_list)):
+        transition_list[i,0,0,1] = np.random.uniform(0,max_prob)
+
+        transition_list[i,1,0,1] = np.random.uniform(transition_list[i,0,0,1],1)
+        transition_list[i,0,1,1] = np.random.uniform(transition_list[i,0,0,1],1)
+        transition_list[i,1,1,1] = np.random.uniform(max(transition_list[i,1,0,1],transition_list[i,0,1,1]),1)
+
+        for j in range(2):
+            for k in range(2):
+                transition_list[i,j,k,0] = 1-transition_list[i,j,k,1]
+    return transition_list
 
 
 
@@ -449,6 +471,7 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    env.is_training = False 
 
     env.reset_all()
 
@@ -486,6 +509,7 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
             state = env.observe()
             if should_train:
                 if t>=T-test_T:
+                    env.is_training = False
                     all_active_rate[epoch,t-(T-test_T)] = np.sum(state)/len(state)
             else:
                 all_active_rate[epoch,t] = np.sum(state)/len(state)
@@ -505,6 +529,7 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
                 if t < (T-test_T):
                     env.total_active = 0
+                    env.is_training =True 
                 else:
                     all_reward[epoch, t-(T-test_T)] = reward
             else:
