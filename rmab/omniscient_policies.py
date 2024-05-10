@@ -98,7 +98,7 @@ def shapley_index_custom(env,state,memoizer_shapley = {}):
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
     corresponding_probabilities = match_probabilities[state_1]
     num_random_combos = 20*len(state_1)
-    # num_random_combos = min(num_random_combos,100000)
+    num_random_combos = min(num_random_combos,1000) #TODO: Change this back to 10K
 
     combinations = np.zeros((num_random_combos, len(corresponding_probabilities)), dtype=int)
 
@@ -115,6 +115,7 @@ def shapley_index_custom(env,state,memoizer_shapley = {}):
     budget_probs = np.array([scipy.special.comb(len(corresponding_probabilities),k) for k in range(0,budget)])
     budget_probs /= np.sum(budget_probs)
 
+
     for i in range(num_random_combos):
         k = random.choices(list(range(len(budget_probs))), weights=budget_probs,k=1)[0]
         ones_indices = random.sample(list(range(len(corresponding_probabilities))),k)
@@ -122,12 +123,24 @@ def shapley_index_custom(env,state,memoizer_shapley = {}):
 
     state = [int(i) for i in state]
 
-    scores = [custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters) for combo in combinations]
+    scores = []
+    for i in range(num_random_combos):
+        combo = combinations[i]
+        scores.append(custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters))
+
     scores = np.array(scores)
 
+    num_by_shapley_index = np.zeros(len(state_1))
+    for j,combo in enumerate(combinations):
+        action = deepcopy(combo) 
+        for i in range(len(state_1)):
+            if combo[i] == 0:
+                action[i] = 1
+                shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
+                num_by_shapley_index[i] += 1
+                action[i] = 0
 
-    for i in range(len(state_1)):
-        shapley_indices[state_1[i]] = np.mean([custom_reward(state,np.array([1 if idx == i else val for idx, val in enumerate(combo)]),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j] for j,combo in enumerate(combinations) if combo[i] == 0])
+    shapley_indices /= num_by_shapley_index
 
     memoizer_shapley[state_str] = shapley_indices
 
@@ -155,7 +168,7 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled):
     state_1 = [i for i in range(len(state)) if state[i] != 0]
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
     corresponding_probabilities = match_probabilities[state_1]
-    num_random_combos = 20*len(state_1)
+    num_random_combos = 1000 # 20*len(state_1)
     # num_random_combos = min(num_random_combos,100000)
 
     combinations = np.zeros((num_random_combos, len(corresponding_probabilities)), dtype=int)
@@ -216,6 +229,10 @@ def whittle_activity_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     if memory == None:
         memoizer = Memoizer('optimal')
+
+        for i in range(2):
+            s = [i for _ in range(len(state))]
+            whittle_index(env,s,budget,lamb,memoizer,reward_function="activity")
     else:
         memoizer = memory 
 
@@ -247,6 +264,9 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
     if memory == None:
         memoizer = Memoizer('optimal')
         match_probs = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
+        for i in range(2):
+            s = [i for _ in range(len(state))]
+            whittle_index(env,s,budget,lamb,memoizer,reward_function="combined",match_probs=match_probs)
     else:
         memoizer, match_probs = memory 
         
@@ -255,8 +275,6 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
     action[sorted_WI[:budget]] = 1
-
-    rew = custom_reward(state,action,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)
 
     return action, (memoizer,match_probs)  
 
@@ -279,21 +297,34 @@ def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     if memory == None:
         memoizer = Memoizer('optimal')
+        match_probs = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
+        for i in range(2):
+            s = [i for _ in range(len(state))]
+            whittle_index(env,s,budget,lamb,memoizer,reward_function="combined",match_probs=match_probs)
+    
     else:
-        memoizer = memory 
+        memoizer, match_probs = memory 
 
     action = np.zeros(N, dtype=np.int8)
     pulled_arms = []
 
     for _ in range(budget):
-        match_probability_list = [custom_reward(one_hot_fixed(i,len(state),pulled_arms),one_hot_fixed(i,len(state),pulled_arms),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
-        state_WI = whittle_index(env,state,budget,lamb,memoizer,match_probs=match_probability_list)
+        if len(pulled_arms) > 0:
+            arms_0_1 = one_hot_fixed(pulled_arms[0],len(state),pulled_arms)
+            default_custom_reward = custom_reward(arms_0_1,arms_0_1,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)
+        else:
+            default_custom_reward = 0
+        match_prob_now = [custom_reward(one_hot_fixed(i,len(state),pulled_arms),one_hot_fixed(i,len(state),pulled_arms),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)-default_custom_reward for i in range(len(state))]
+        match_prob_now = np.array(match_prob_now)
+
+        state_WI = whittle_index(env,state,budget,lamb,memoizer,match_probs=match_probs,match_prob_now=match_prob_now)
+        
         state_WI[action == 1] = -100
         argmax_val = np.argmax(state_WI)
         action[argmax_val] = 1 
         pulled_arms.append(argmax_val)
 
-    return action, memoizer 
+    return action, (memoizer,match_probs) 
  
 def greedy_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Whittle index policy based on computing the subsidy for each arm
@@ -351,23 +382,28 @@ def shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_resu
     N = len(state) 
 
     if memory == None:
-        memoizer = Memoizer('optimal')
+        memory_whittle = Memoizer('optimal')
+        match_probs = np.array(shapley_index_custom(env,np.ones(len(state)),{})[0])
+        for i in range(2):
+            s = [i for _ in range(len(state))]
+            whittle_index(env,s,budget,lamb,memory_whittle,reward_function="combined",match_probs=match_probs)
+
     else:
-        memoizer = memory 
+        memory_whittle, match_probs = memory 
 
     action = np.zeros(N, dtype=np.int8)
     pulled_arms = []
 
     for _ in range(budget):
-        memory_shapley = np.array(shapley_index_custom_fixed(env,np.ones(len(state)),{},pulled_arms)[0])
-        state_WI = whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",match_probs=memory_shapley)
+        match_prob_now = np.array(shapley_index_custom_fixed(env,np.ones(len(state)),{},pulled_arms)[0])
+        state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="combined",match_probs=match_probs,match_prob_now=match_prob_now)
         state_WI[action == 1] = -100
 
         argmax_val = np.argmax(state_WI)
         action[argmax_val] = 1 
         pulled_arms.append(argmax_val)
 
-    return action, memoizer 
+    return action, (memory_whittle,match_probs) 
 
 
 def q_iteration_epoch(env,lamb,reward_function='combined',power=None):
@@ -572,11 +608,15 @@ def shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_result
     Returns: Actions, numpy array of 0-1 for each agent, and the Whittle memoizer"""
 
 
-    N = len(state) 
+    N = len(state)
 
     if memory == None:
         memory_whittle = Memoizer('optimal')
         memory_shapley = np.array(shapley_index_custom(env,np.ones(len(state)),{})[0])
+    
+        for i in range(2):
+            s = [i for _ in range(len(state))]
+            whittle_index(env,s,budget,lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley)
     else:
         memory_whittle, memory_shapley = memory 
 

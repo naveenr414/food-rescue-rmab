@@ -44,7 +44,7 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 42
+    seed        = 45
     n_arms      = 10
     volunteers_per_arm = 1
     budget      = 5
@@ -55,10 +55,10 @@ if is_jupyter:
     n_epochs    = 1
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
-    lamb = 0
-    prob_distro = 'fixed'
-    reward_type = "set_cover"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 1, 'arm_set_high': 1}
+    lamb = 0.5
+    prob_distro = 'uniform'
+    reward_type = "linear"
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1}
     policy_lr=5e-3
     value_lr=1e-4
     train_iterations = 30
@@ -269,21 +269,27 @@ results['{}_time'.format(name)] =  rewards['time']
 print(np.mean(rewards['reward']))
 # -
 
-if prob_distro == "fixed":
+if reward_type == "set_cover":
     match_probs = simulator.match_probability_list[simulator.agent_idx]
 
-    avg_combo_ratio = []
+    best_overall = 0.01
 
+    avg_combo = []
+
+    match_prob_lens = sum(sorted([len(i) for i in match_probs])[-budget:])
 
     for i in combinations(match_probs,budget):
         s = set()
         for j in i:
             s = s.union(j)
-        avg_combo_ratio.append(len(s)/sum([len(j) for j in i]))
+        sum_len = sum([len(j) for j in i])
 
-    results['ratio'] = np.mean(avg_combo_ratio)
-    print(results['ratio'])
-
+        if sum_len == match_prob_lens:
+            avg_combo.append(len(s))
+        if len(s) > best_overall:
+            best_overall = len(s) 
+    ratio = np.mean(avg_combo)/best_overall 
+    results['ratio'] = ratio  
 
 # +
 policy = whittle_greedy_policy
@@ -309,28 +315,27 @@ if n_arms * volunteers_per_arm <= 4:
     results['{}_time'.format(name)] =  rewards['time']
     print(np.mean(rewards['reward']))
 
-# +
-policy = shapley_whittle_custom_policy 
-name = "shapley_whittle_custom"
+if n_arms * volunteers_per_arm <= 1000:
+    policy = shapley_whittle_custom_policy 
+    name = "shapley_whittle_custom"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
 
-# +
-policy = mcts_shapley_policy
-name = "mcts_shapley"
+if n_arms * volunteers_per_arm <= 1000:
+    policy = mcts_shapley_policy
+    name = "mcts_shapley"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=n_episodes*episode_len)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-np.mean(rewards['reward'])
-# -
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=n_episodes*episode_len)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
 
 if n_arms * volunteers_per_arm <= 20:
     policy = whittle_iterative_policy
@@ -341,7 +346,7 @@ if n_arms * volunteers_per_arm <= 20:
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
-    np.mean(rewards['reward'])
+    print(np.mean(rewards['reward']))
 
 # +
 policy = greedy_whittle_iterative_policy
@@ -352,7 +357,7 @@ results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
-np.mean(rewards['reward'])
+print(np.mean(rewards['reward']))
 # -
 
 if n_arms * volunteers_per_arm <= 20:
@@ -364,7 +369,7 @@ if n_arms * volunteers_per_arm <= 20:
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
-    np.mean(rewards['reward'])
+    print(np.mean(rewards['reward']))
 
 # ## Write Data
 

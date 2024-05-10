@@ -30,7 +30,7 @@ import secrets
 from rmab.simulator import RMABSimulator, run_heterogenous_policy, get_discounted_reward
 from rmab.omniscient_policies import *
 from rmab.dqn_policies import *
-from rmab.fr_dynamics import get_all_transitions
+from rmab.fr_dynamics import get_all_transitions, get_db_data 
 from rmab.mcts_policies import *
 from rmab.utils import get_save_path, delete_duplicate_results, create_prob_distro
 import resource
@@ -123,6 +123,16 @@ n_actions = 2
 all_population_size = 100 
 all_transitions = get_all_transitions(all_population_size)
 
+if prob_distro == "food_rescue":
+    probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
+    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
+    probs_by_num = {}
+    for i in rescues_by_user:
+        if str(i) in probs_by_user and probs_by_user[str(i)] > 0:
+            if len(rescues_by_user[i]) not in probs_by_num:
+                probs_by_num[len(rescues_by_user[i])] = []
+            probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
+
 
 def create_environment(seed):
     random.seed(seed)
@@ -205,7 +215,12 @@ results['parameters'] = {'seed'      : seed,
         'time_per_run': TIME_PER_RUN, 
         'prob_distro': prob_distro, 
         'policy_lr': policy_lr, 
-        'value_lr': value_lr} 
+        'value_lr': value_lr,
+        'reward_type': reward_type, 
+        'universe_size': reward_parameters['universe_size'],
+        'arm_set_low': reward_parameters['arm_set_low'], 
+        'arm_set_high': reward_parameters['arm_set_high'],
+} 
 
 # ## Index Policies
 

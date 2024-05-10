@@ -43,6 +43,38 @@ def get_data_all_users(cursor):
 
     return data_by_user 
 
+def get_all_transitions_partition(population_size,partition):
+    """Get a numpy matrix with all the transition probabilities for each type of agent
+    
+    Arguments: 
+        population_size: Number of agents (2...population_size) we're getting data for
+    
+    Returns: List of numpy matrices of size 2x2x2; look at get transitions for more info"""
+
+    db_name = secret.database_name 
+    username = secret.database_username 
+    password = secret.database_password 
+    ip_address = secret.ip_address
+    port = secret.database_port
+
+    connection_dict = open_connection(db_name,username,password,ip_address,port)
+    connection = connection_dict['connection']
+    cursor = connection_dict['cursor']
+
+    data_by_user = get_data_all_users(cursor)
+
+    close_connection(connection,cursor)
+
+    transitions = []
+
+    for p in partition:
+        temp_transition = []
+        for i in p:
+            temp_transition.append(get_transitions(data_by_user,i))
+        transitions.append(temp_transition)
+    return transitions
+
+
 def get_all_transitions(population_size):
     """Get a numpy matrix with all the transition probabilities for each type of agent
     
@@ -120,7 +152,10 @@ def get_transitions(data_by_user,num_rescues):
     
     for i in range(len(count_matrix)):
         for j in range(len(count_matrix[i])):
-            count_matrix[i][j]/=(np.sum(count_matrix[i][j]))
+            if np.sum(count_matrix[i][j]) != 0:
+                count_matrix[i][j]/=(np.sum(count_matrix[i][j]))
+            else:
+                count_matrix[i][j] = np.array([0.5,0.5])
     
     return count_matrix 
 

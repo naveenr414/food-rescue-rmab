@@ -12,7 +12,7 @@ import math
 def get_stationary_distribution(P):
     """Given a Markov Chain, P, get its stationary distribution
     
-    Arguments:
+    Arguments: 
         P: Square numpy array representing transition probabilities
     
     Returns: Vector of stationary probabilities"""
@@ -416,5 +416,8 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
         val = value_by_combo[str_state_action]
 
         return val 
+    elif custom_reward_type == "linear":
+        probs = s*a*match_probabilities
+        return np.sum(probs)
     else:
         raise Exception("Reward type {} not found".format(custom_reward_type))  

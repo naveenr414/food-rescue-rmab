@@ -6,7 +6,7 @@ do
     tmux send-keys -t match_${session} ENTER 
     tmux send-keys -t match_${session} "cd ~/projects/food_rescue_rmab/scripts/notebooks" ENTER
 
-    for start_seed in 42
+    for start_seed in 42 45 48
     do 
         seed=$((${session}+${start_seed}))
         echo ${seed}

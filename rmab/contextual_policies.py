@@ -99,7 +99,6 @@ def whittle_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
         memoizer = Memoizer('optimal') 
         match_probabilities = env.current_episode_match_probs[:,env.agent_idx]
         match_probs = np.mean(match_probabilities,axis=0)
-        #match_probs = [env.match_function(env.context,match_probabilities[i])*state[i] for i in range(N)]
     else:
         memoizer, match_probs = memory 
 
@@ -184,6 +183,25 @@ def greedy_policy_contextual(env,state,budget,lamb,memory,per_epoch_results):
     action[selected_idx] = 1
     return action, memory
 
+def whittle_future_contextual_policy(env,state,budget,lamb,memory, per_epoch_results):
+    N = len(state) 
+
+    if memory == None:
+        memoizer = Memoizer('optimal')
+        match_probs_future = [env.get_average_prob(i) for i in env.agent_idx]
+    else:
+        memoizer, match_probs_future = memory 
+    
+    match_probs_now = env.current_episode_match_probs[env.timestep + env.episode_count*env.episode_len][env.agent_idx]    
+        
+    state_WI = whittle_index(env,state,budget,lamb,memoizer,match_probs=match_probs_future,match_prob_now=match_probs_now)
+
+    sorted_WI = np.argsort(state_WI)[::-1]
+    action = np.zeros(N, dtype=np.int8)
+    action[sorted_WI[:budget]] = 1
+
+    return action, (memoizer,match_probs_future)  
+
 def whittle_greedy_contextual_policy(env,state,budget,lamb,memory, per_epoch_results):
     """Combination of the Whittle index + match probability
     
@@ -240,7 +258,7 @@ def shapley_whittle_contextual_policy(env,state,budget,lamb,memory, per_epoch_re
         memory_shapley = np.array(shapley_index_contextual(env,np.ones(len(state)),{})[0])
     else:
         memory_whittle, memory_shapley = memory 
-        
+            
     state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="activity")
     state_WI*=lamb 
 
