@@ -308,6 +308,8 @@ def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
     action = np.zeros(N, dtype=np.int8)
     pulled_arms = []
 
+    start = time.time() 
+
     for _ in range(budget):
         if len(pulled_arms) > 0:
             arms_0_1 = one_hot_fixed(pulled_arms[0],len(state),pulled_arms)
@@ -322,7 +324,11 @@ def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
         state_WI[action == 1] = -100
         argmax_val = np.argmax(state_WI)
         action[argmax_val] = 1 
+
         pulled_arms.append(argmax_val)
+
+        if time.time()-start > env.time_limit:
+            break 
 
     return action, (memoizer,match_probs) 
  
@@ -394,6 +400,8 @@ def shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_resu
     action = np.zeros(N, dtype=np.int8)
     pulled_arms = []
 
+    start = time.time() 
+
     for _ in range(budget):
         match_prob_now = np.array(shapley_index_custom_fixed(env,np.ones(len(state)),{},pulled_arms)[0])
         state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="combined",match_probs=match_probs,match_prob_now=match_prob_now)
@@ -402,6 +410,9 @@ def shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_resu
         argmax_val = np.argmax(state_WI)
         action[argmax_val] = 1 
         pulled_arms.append(argmax_val)
+
+        if time.time()-start > env.time_limit:
+            break 
 
     return action, (memory_whittle,match_probs) 
 

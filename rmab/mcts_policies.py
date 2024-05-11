@@ -410,6 +410,21 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
     memory = s.memory 
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
+
+    last_reward = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters)
+    last_reward -= np.sum(state)/len(state)*lamb 
+    arm_q = get_multi_Q(state,action,env,lamb,memory[1],[0 for i in range(len(action))])
+    score = last_reward + arm_q 
+
+    shapley_action = shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_results)[0]    
+    last_reward = get_reward_custom(state,shapley_action,match_probs,lamb,env.reward_type,env.reward_parameters)
+    last_reward -= np.sum(state)/len(state)*lamb 
+    arm_q = get_multi_Q(state,shapley_action,env,lamb,memory[1],[0 for i in range(len(shapley_action))])
+    score_shapley = last_reward + arm_q 
+
+    if score_shapley > score:
+        action = shapley_action 
+
     
     return action, memory
 

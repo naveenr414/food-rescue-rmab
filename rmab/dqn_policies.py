@@ -57,7 +57,7 @@ class DQN(nn.Module):
         return self.layer3(x)
 
 
-def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=False):
+def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=False,greedy_eval=False):
     """Use a DQN policy to compute the action values
     
     Arguments: 
@@ -175,7 +175,28 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
     # # Compute the best action
     action_values = q_network(torch.Tensor([state]))[0]
 
-    max_action = valid_actions[torch.argmax(action_values)]
+
+    if greedy_eval:
+        curr_action = [0 for i in range(len(state))]
+
+        for i in range(budget):
+            best_action = 0 
+            best_reward = -1 
+            for j in range(len(state)):
+                if curr_action[j] == 0:
+                    new_action = deepcopy(curr_action)
+                    new_action[j] = 1
+                    idx = action_to_idx[''.join([str(k) for k in new_action])]
+                    reward = action_values[idx]
+
+                    if reward > best_reward:
+                        best_reward = reward 
+                        best_action = j 
+            curr_action[best_action] = 1
+        max_action = np.array(curr_action)
+    else: 
+        max_action = valid_actions[torch.argmax(action_values)]
+
 
     if random.random() < epsilon and current_epoch < train_epochs:
         action = random.sample(valid_actions,1)[0]
@@ -185,7 +206,9 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
 
     past_states.append(state)
     past_actions.append(action)
-    past_rewards.append(get_reward(state,action,match_probs,lamb))
+    rew = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters)
+
+    past_rewards.append(rew)
 
     temp_list = []
     if stabilization:
@@ -210,8 +233,13 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
 
     return action, memory
 
+
+
 def dqn_stable_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
     return dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True)
+
+def dqn_policy_greedy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    return dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",greedy_eval=True)
 
 def dqn_with_stablization_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
     return dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True)
@@ -221,6 +249,8 @@ def dqn_max_with_stablization_steps(env,state,budget,lamb,memory,per_epoch_resul
 
 def dqn_max_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
     return dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",use_max=True)
+
+
 
 def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=False,use_max=False):
     """Use a DQN policy to compute the action values

@@ -28,9 +28,9 @@ import sys
 import secrets
 from itertools import combinations
 
-from rmab.simulator import RMABSimulator, run_heterogenous_policy, get_discounted_reward
+from rmab.simulator import RMABSimulator, run_heterogenous_policy, get_discounted_reward, create_random_transitions
 from rmab.omniscient_policies import *
-from rmab.fr_dynamics import get_all_transitions, get_db_data 
+from rmab.fr_dynamics import get_all_transitions, get_db_data, get_all_transitions_partition
 from rmab.compute_whittle import arm_compute_whittle_multi_prob
 from rmab.mcts_policies import *
 from rmab.utils import get_save_path, delete_duplicate_results, create_prob_distro
@@ -44,7 +44,7 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 45
+    seed        = 43
     n_arms      = 10
     volunteers_per_arm = 1
     budget      = 5
@@ -57,19 +57,20 @@ if is_jupyter:
     TIME_PER_RUN = 0.01 * 1000
     lamb = 0.5
     prob_distro = 'uniform'
-    reward_type = "linear"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1}
+    reward_type = "max"
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 5}
     policy_lr=5e-3
     value_lr=1e-4
     train_iterations = 30
     test_iterations = 30
     out_folder = 'iterative'
+    time_limit = 100
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
     parser.add_argument('--volunteers_per_arm',         '-V', help='volunteers per arm', type=int, default=5)
     parser.add_argument('--episode_len',    '-H', help='episode length', type=int, default=50)
-    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=1)
+    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=100)
     parser.add_argument('--budget',         '-B', help='budget', type=int, default=3)
     parser.add_argument('--n_epochs',       '-E', help='number of epochs (num_repeats)', type=int, default=1)
     parser.add_argument('--discount',       '-d', help='discount factor', type=float, default=0.9)
@@ -87,6 +88,7 @@ else:
     parser.add_argument('--train_iterations', help='Number of MCTS train iterations', type=int, default=30)
     parser.add_argument('--test_iterations', help='Number of MCTS test iterations', type=int, default=30)
     parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='iterative')
+    parser.add_argument('--time_limit', help='Online time limit for computation', type=float, default=100)
 
     parser.add_argument('--use_date', action='store_true')
 
@@ -114,6 +116,7 @@ else:
     reward_parameters = {'universe_size': args.universe_size,
                         'arm_set_low': args.arm_set_low, 
                         'arm_set_high': args.arm_set_high}
+    time_limit = args.time_limit 
 
 save_name = secrets.token_hex(4)  
 # -
@@ -121,18 +124,99 @@ save_name = secrets.token_hex(4)
 n_states = 2
 n_actions = 2
 
+np.random.seed(seed)
 all_population_size = 100 
-all_transitions = get_all_transitions(all_population_size)
+max_transition_prob = 0.25
+all_transitions = create_random_transitions(all_population_size,max_transition_prob)
 
-if prob_distro == "food_rescue":
+
+def partition_volunteers(probs_by_num,num_by_section):
+    total = sum([len(probs_by_num[i]) for i in probs_by_num])
+    num_per_section = total//num_by_section
+
+    nums_by_partition = []
+    current_count = 0
+    current_partition = []
+
+    keys = sorted(probs_by_num.keys())
+
+    for i in keys:
+        if current_count >= num_per_section*(len(nums_by_partition)+1):
+            nums_by_partition.append(current_partition)
+            current_partition = []
+        
+        current_partition.append(i)
+        current_count += len(probs_by_num[i])
+    return nums_by_partition
+
+
+if prob_distro == "food_rescue_top":
+    all_population_size = 20 
     probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
     donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
     probs_by_num = {}
     for i in rescues_by_user:
-        if str(i) in probs_by_user and probs_by_user[str(i)] > 0:
+        if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 100:
             if len(rescues_by_user[i]) not in probs_by_num:
                 probs_by_num[len(rescues_by_user[i])] = []
             probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
+
+    partitions = partition_volunteers(probs_by_num,all_population_size)
+    probs_by_partition = []
+
+    for i in range(len(partitions)):
+        temp_probs = []
+        for j in partitions[i]:
+            temp_probs += (probs_by_num[j])
+        probs_by_partition.append(temp_probs)
+
+    all_transitions = get_all_transitions_partition(all_population_size,partitions)
+
+    for i,partition in enumerate(partitions):
+        current_transitions = np.array(all_transitions[i])
+        partition_scale = np.array([len(probs_by_num[j]) for j in partition])
+        partition_scale = partition_scale/np.sum(partition_scale)
+        prod = current_transitions*partition_scale[:,np.newaxis,np.newaxis,np.newaxis]
+        new_transition = np.sum(prod,axis=0)
+        all_transitions[i] = new_transition
+    all_transitions = np.array(all_transitions)
+
+if prob_distro == "food_rescue":
+    all_population_size = 100 
+
+    probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
+    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
+    probs_by_num = {}
+    for i in rescues_by_user:
+        if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
+            if len(rescues_by_user[i]) not in probs_by_num:
+                probs_by_num[len(rescues_by_user[i])] = []
+            probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
+
+    partitions = partition_volunteers(probs_by_num,all_population_size)
+    probs_by_partition = []
+    all_transitions = get_all_transitions_partition(all_population_size,partitions)
+
+    for i in range(len(partitions)):
+        temp_probs = []
+        for j in partitions[i]:
+            temp_probs += (probs_by_num[j])
+        probs_by_partition.append(temp_probs)
+
+    for i,partition in enumerate(partitions):
+        current_transitions = np.array(all_transitions[i])
+        partition_scale = np.array([len(probs_by_num[j]) for j in partition])
+        partition_scale = partition_scale/np.sum(partition_scale)
+        prod = current_transitions*partition_scale[:,np.newaxis,np.newaxis,np.newaxis]
+        new_transition = np.sum(prod,axis=0)
+        all_transitions[i] = new_transition
+    all_transitions = np.array(all_transitions)
+
+if prob_distro == "high_prob":
+    np.random.seed(seed)
+    all_population_size = 100 
+    max_transition_prob = 1.0
+    all_transitions = create_random_transitions(all_population_size,max_transition_prob)
 
 
 def create_environment(seed):
@@ -151,10 +235,17 @@ def create_environment(seed):
                     s.add(np.random.randint(0,reward_parameters['universe_size']))
                 match_probabilities.append(s)
         else:
-            set_sizes = [np.random.poisson(int(reward_parameters['arm_set_low'])) for i in range(N)]
-            match_probabilities = [set([np.random.randint(0,reward_parameters['universe_size']) for _ in range(set_sizes[i])]) for i in range(N)]
-    elif prob_distro == "food_rescue":
-        match_probabilities = [np.random.choice(probs_by_num[(i+2*volunteers_per_arm)//volunteers_per_arm]) for i in range(N)] 
+            set_sizes = [np.random.randint(int(reward_parameters['arm_set_low']),int(reward_parameters['arm_set_high'])+1) for i in range(N)]
+            match_probabilities = [] 
+            
+            for i in range(N):
+                temp_set = set() 
+                
+                while len(temp_set) < set_sizes[i]:
+                    temp_set.add(np.random.randint(0,reward_parameters['universe_size']))
+                match_probabilities.append(temp_set)
+    elif prob_distro == "food_rescue" or prob_distro == "food_rescue_top":
+        match_probabilities = [np.random.choice(probs_by_partition[i//volunteers_per_arm]) for i in range(N)] 
     else:
         match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
 
@@ -176,6 +267,7 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
 
     for seed in seed_list:
         simulator = create_environment(seed)
+        simulator.time_limit = time_limit
 
         if is_mcts:
             simulator.mcts_train_iterations = train_iterations
@@ -184,9 +276,9 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
             simulator.value_lr = value_lr
 
         if is_mcts:
-            match, active_rate, memory = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=test_length,get_memory=True,per_epoch_function=per_epoch_function)
+            match, active_rate, memory = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=False,test_T=test_length,get_memory=True,per_epoch_function=per_epoch_function)
         else:
-            match, active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=test_length,per_epoch_function=per_epoch_function)
+            match, active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=False,test_T=test_length,per_epoch_function=per_epoch_function)
         time_whittle = simulator.time_taken
         discounted_reward = get_discounted_reward(match,active_rate,discount,lamb)
         scores['reward'].append(discounted_reward)
@@ -218,6 +310,7 @@ results['parameters'] = {'seed'      : seed,
         'universe_size': reward_parameters['universe_size'],
         'arm_set_low': reward_parameters['arm_set_low'], 
         'arm_set_high': reward_parameters['arm_set_high'],
+        'time_limit': time_limit
         } 
 
 # ## Index Policies
@@ -228,7 +321,7 @@ seed_list = [seed]
 policy = greedy_policy
 name = "greedy"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -239,7 +332,7 @@ print(np.mean(rewards['reward']))
 policy = random_policy
 name = "random"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -250,7 +343,7 @@ print(np.mean(rewards['reward']))
 policy = whittle_activity_policy
 name = "whittle_activity"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -261,7 +354,7 @@ print(np.mean(rewards['reward']))
 policy = whittle_policy
 name = "linear_whittle"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -295,7 +388,7 @@ if reward_type == "set_cover":
 policy = whittle_greedy_policy
 name = "greedy_whittle"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -308,7 +401,7 @@ if n_arms * volunteers_per_arm <= 4:
     per_epoch_function = q_iteration_custom_epoch()
     name = "optimal"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function,test_length=n_episodes*episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function,test_length=episode_len)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
@@ -319,7 +412,18 @@ if n_arms * volunteers_per_arm <= 1000:
     policy = shapley_whittle_custom_policy 
     name = "shapley_whittle_custom"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 1000:
+    policy = mcts_linear_policy
+    name = "mcts_linear"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=episode_len)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
@@ -330,7 +434,7 @@ if n_arms * volunteers_per_arm <= 1000:
     policy = mcts_shapley_policy
     name = "mcts_shapley"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=n_episodes*episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=episode_len)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
@@ -341,7 +445,7 @@ if n_arms * volunteers_per_arm <= 20:
     policy = whittle_iterative_policy
     name = "iterative_whittle"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
@@ -352,7 +456,7 @@ if n_arms * volunteers_per_arm <= 20:
 policy = greedy_whittle_iterative_policy
 name = "greedy_iterative_whittle"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=episode_len)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -364,7 +468,7 @@ if n_arms * volunteers_per_arm <= 20:
     policy = shapley_whittle_iterative_policy
     name = "shapley_iterative_whittle"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=n_episodes*episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=episode_len)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']

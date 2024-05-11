@@ -7,6 +7,28 @@ import random
 import torch 
 import time 
 
+def random_policy(env,state,budget,lamb,memory, per_epoch_results):
+    """Random policy that randomly notifies budget arms
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+
+
+    N = len(state)
+    selected_idx = random.sample(list(range(N)), budget)
+    action = np.zeros(N, dtype=np.int8)
+    action[selected_idx] = 1
+
+    return action, None
+
+
 class RMABSimulator(gym.Env):
     '''
     This simulator simulates the interaction with a set of arms with unknown transition probabilities
@@ -689,12 +711,8 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
     env.reset_all()
 
-    if should_train:
-        all_reward = np.zeros((n_epochs,test_T))
-        all_active_rate = np.zeros((n_epochs,test_T))
-    else:
-        all_reward = np.zeros((n_epochs, T))
-        all_active_rate = np.zeros((n_epochs,T))
+    all_reward = np.zeros((n_epochs,test_T))
+    all_active_rate = np.zeros((n_epochs,test_T))
     env.train_epochs = T-test_T
     env.test_epochs = test_T
 
@@ -702,9 +720,6 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
     train_time_taken = 0
 
     for epoch in range(n_epochs):
-        if not should_train:
-            np.random.seed(seed)
-
         train_time_start = time.time() 
 
         if epoch != 0: env.reset_instance()
@@ -723,14 +738,15 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
                 start = time.time()
 
             state = env.observe()
-            if should_train:
-                if t>=T-test_T:
-                    env.is_training = False
-                    all_active_rate[epoch,t-(T-test_T)] = np.sum(state)/len(state)
-            else:
-                all_active_rate[epoch,t] = np.sum(state)/len(state)
+            if t>=T-test_T:
+                env.is_training = False
+                all_active_rate[epoch,t-(T-test_T)] = np.sum(state)/len(state)
 
-            action,memory = policy(env,state,budget,lamb,memory,per_epoch_results)
+            if should_train or t >=T-test_T:
+                action,memory = policy(env,state,budget,lamb,memory,per_epoch_results)
+            else:
+                action,memory = random_policy(env,state,budget,lamb,memory,per_epoch_results)
+            
             next_state, reward, done, _ = env.step(action)
 
             if done and t+1 < T: env.reset()
@@ -738,21 +754,19 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
             if t == T-test_T:
                 train_time_taken += time.time()-train_time_start
 
-            if should_train:
-                if t == T-test_T:
-                    np.random.seed(seed)
-                    start = time.time()
+            if t == T-test_T:
+                np.random.seed(seed)
+                start = time.time()
 
-                if t < (T-test_T):
-                    env.total_active = 0
-                    env.is_training =True 
-                else:
-                    all_reward[epoch, t-(T-test_T)] = reward
+            if t < (T-test_T):
+                env.total_active = 0
+                env.is_training =True 
             else:
-                all_reward[epoch, t] = reward
+                all_reward[epoch, t-(T-test_T)] = reward
         inference_time_taken += time.time()-start 
     env.time_taken = inference_time_taken
     env.train_time = train_time_taken
+
 
     print("Took {} time for inference and {} time for training".format(inference_time_taken,train_time_taken))
 

@@ -8,9 +8,9 @@ do
     do 
         seed=$((${session}+${start_seed}))
         echo ${seed}
-        for volunteers in 4 5 10 25 100
+        for volunteers in 10
         do 
-            for budget_frac in 0.25 0.5 0.75 1
+            for budget_frac in 0.5
             do 
                 budget=$(echo "${volunteers}*${budget_frac}" | bc)
                 budget=$(printf "%.0f" $budget)
@@ -18,7 +18,7 @@ do
 
                 for max_prob in 0.25 0.5 0.75 1
                 do 
-                    tmux send-keys -t match_${session} "conda activate food; python synthetic_transitions.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${volunteers} --lamb 0.5 --budget ${budget} --reward_type max --arm_set_low 0 --arm_set_high 1 --out_folder baselines/synthetic_transitions --max_prob ${max_prob}" ENTER
+                    tmux send-keys -t match_${session} "conda activate food; python synthetic_transitions.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${volunteers} --lamb 0.5 --budget ${budget} --reward_type max --arm_set_low 0 --arm_set_high 1 --out_folder baselines/synthetic_transitions --max_prob ${max_prob} --n_episodes 100" ENTER
                 done 
             done 
         done 

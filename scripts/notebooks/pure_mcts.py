@@ -142,10 +142,17 @@ def create_environment(seed):
                     s.add(np.random.randint(0,reward_parameters['universe_size']))
                 match_probabilities.append(s)
         else:
-            set_sizes = [np.random.poisson(int(reward_parameters['arm_set_low'])) for i in range(N)]
-            match_probabilities = [set([np.random.randint(0,reward_parameters['universe_size']) for _ in range(set_sizes[i])]) for i in range(N)]
-    elif prob_distro == "food_rescue":
-        match_probabilities = [np.random.choice(probs_by_num[(i+2*volunteers_per_arm)//volunteers_per_arm]) for i in range(N)] 
+            set_sizes = [np.random.randint(int(reward_parameters['arm_set_low']),int(reward_parameters['arm_set_high'])+1) for i in range(N)]
+            match_probabilities = [] 
+            
+            for i in range(N):
+                temp_set = set() 
+                
+                while len(temp_set) < set_sizes[i]:
+                    temp_set.add(np.random.randint(0,reward_parameters['universe_size']))
+                match_probabilities.append(temp_set)
+    elif prob_distro == "food_rescue" or prob_distro == "food_rescue_top":
+        match_probabilities = [np.random.choice(probs_by_partition[i//volunteers_per_arm]) for i in range(N)] 
     else:
         match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
 
