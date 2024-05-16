@@ -44,27 +44,27 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 43
-    n_arms      = 10
+    seed        = 45
+    n_arms      = 4
     volunteers_per_arm = 1
-    budget      = 5
+    budget      = 2
     discount    = 0.9
     alpha       = 3 
-    n_episodes  = 1
+    n_episodes  = 100
     episode_len = 50 
     n_epochs    = 1
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
     lamb = 0.5
     prob_distro = 'uniform'
-    reward_type = "max"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 5}
+    reward_type = "linear"
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1}
     policy_lr=5e-3
     value_lr=1e-4
     train_iterations = 30
     test_iterations = 30
     out_folder = 'iterative'
-    time_limit = 100
+    time_limit = 1
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
@@ -218,6 +218,15 @@ if prob_distro == "high_prob":
     max_transition_prob = 1.0
     all_transitions = create_random_transitions(all_population_size,max_transition_prob)
 
+if prob_distro == "one_time":
+    np.random.seed(seed)
+    all_population_size = 100 
+    max_transition_prob = 1.0
+    all_transitions = np.zeros((all_population_size,2,2,2))
+    all_transitions[:,:,1,0] = 1
+    all_transitions[:,1,0,1] = 1
+    all_transitions[:,0,0,0] = 1
+
 
 def create_environment(seed):
     random.seed(seed)
@@ -256,7 +265,7 @@ def create_environment(seed):
     return simulator 
 
 
-def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_iterations=0,test_iterations=0,test_length=20):
+def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_iterations=0,test_iterations=0,test_length=20,shapley_iterations=1000):
     memories = []
     scores = {
         'reward': [],
@@ -269,11 +278,32 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
         simulator = create_environment(seed)
         simulator.time_limit = time_limit
 
-        if is_mcts:
-            simulator.mcts_train_iterations = train_iterations
-            simulator.mcts_test_iterations = test_iterations
-            simulator.policy_lr = policy_lr
-            simulator.value_lr = value_lr
+        simulator.mcts_train_iterations = train_iterations
+        simulator.mcts_test_iterations = test_iterations
+        simulator.policy_lr = policy_lr
+        simulator.value_lr = value_lr
+        simulator.shapley_iterations = shapley_iterations 
+
+        if prob_distro == "linearity":
+            set_list = []
+
+            for i in range(budget):
+                set_list.append(set(list(range(1,int(reward_parameters['arm_set_high'])+1))))
+            
+            for i in range(n_arms*volunteers_per_arm-budget):
+                nums = list(range(1,int(reward_parameters['universe_size'])+1))[i*int(reward_parameters['arm_set_low']):(i+1)*int(reward_parameters['arm_set_low']):]
+                set_list.append(set(nums))
+            
+            simulator.match_probability_list[simulator.cohort_selection[0]]  = set_list 
+
+        if prob_distro == "one_time":
+            N = n_arms*volunteers_per_arm
+            simulator.first_init_states = np.array([[[1 for i in range(N)] for i in range(n_episodes)]])
+            random.seed(seed)
+            shuffled_list = [reward_parameters['arm_set_high'] for i in range(2)] + [reward_parameters['arm_set_high'] for i in range(N-2)]
+            random.shuffle(shuffled_list)
+
+            simulator.match_probability_list[simulator.cohort_selection[0]] = shuffled_list
 
         if is_mcts:
             match, active_rate, memory = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=False,test_T=test_length,get_memory=True,per_epoch_function=per_epoch_function)
@@ -362,7 +392,7 @@ results['{}_time'.format(name)] =  rewards['time']
 print(np.mean(rewards['reward']))
 # -
 
-if reward_type == "set_cover":
+if reward_type == "set_cover" and n_arms <= 10:
     match_probs = simulator.match_probability_list[simulator.agent_idx]
 
     best_overall = 0.01
@@ -383,18 +413,7 @@ if reward_type == "set_cover":
             best_overall = len(s) 
     ratio = np.mean(avg_combo)/best_overall 
     results['ratio'] = ratio  
-
-# +
-policy = whittle_greedy_policy
-name = "greedy_whittle"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
-# -
+    print(ratio)
 
 if n_arms * volunteers_per_arm <= 4:
     policy = q_iteration_policy
@@ -419,29 +438,55 @@ if n_arms * volunteers_per_arm <= 1000:
     results['{}_time'.format(name)] =  rewards['time']
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 1000:
+if n_arms * volunteers_per_arm <= 100:
     policy = mcts_linear_policy
     name = "mcts_linear"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len,train_iterations=400,test_iterations=400)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 1000:
+
+if n_arms * volunteers_per_arm <= 100:
     policy = mcts_shapley_policy
     name = "mcts_shapley"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len,train_iterations=400,test_iterations=400)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 20:
+
+if n_arms * volunteers_per_arm <= 100:
+    policy = mcts_shapley_policy
+    name = "mcts_shapley_40"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len,train_iterations=40,test_iterations=40)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+
+if n_arms * volunteers_per_arm <= 100:
+    policy = mcts_shapley_policy
+    name = "mcts_shapley_4"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len,train_iterations=4,test_iterations=4)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+
+if n_arms * volunteers_per_arm <= 250:
     policy = whittle_iterative_policy
     name = "iterative_whittle"
 
@@ -452,23 +497,44 @@ if n_arms * volunteers_per_arm <= 20:
     results['{}_time'.format(name)] =  rewards['time']
     print(np.mean(rewards['reward']))
 
-# +
-policy = greedy_whittle_iterative_policy
-name = "greedy_iterative_whittle"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=episode_len)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
-# -
-
-if n_arms * volunteers_per_arm <= 20:
+if n_arms * volunteers_per_arm <= 25:
     policy = shapley_whittle_iterative_policy
     name = "shapley_iterative_whittle"
 
     rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=episode_len)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 25:
+    policy = shapley_whittle_iterative_policy
+    name = "shapley_iterative_whittle_100"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=episode_len,shapley_iterations=100)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 25:
+    policy = shapley_whittle_iterative_policy
+    name = "shapley_iterative_whittle_10"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=episode_len,shapley_iterations=10)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 25:
+    policy = shapley_whittle_iterative_policy
+    name = "shapley_iterative_whittle_1"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=episode_len,shapley_iterations=1)
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']

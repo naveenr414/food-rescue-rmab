@@ -442,6 +442,35 @@ def arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_break, 
 
     return subsidy
 
+def fast_arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=0.5,match_prob=0.5,num_arms=4):
+    """Faster Version of Computing Whittle with multiple probabilities
+    Uses explicit formulas for the Whittle index, which were solved through Mathematica
+    Doing so avoids expensive Q Iteration
+    
+    Arguments:  
+        transitions: 2x2 numpy array, T(s,a,1)
+        state: Integer, 0 or 1
+        discount: Float, \gamma, future discount
+        subsidy_break: Minimum subsidy, used to compute Whittle when state != 1
+    
+    Returns: Whittle Index"""
+
+    a = transitions[0,0]
+    b = transitions[0,1]
+    c = transitions[1,0]
+    d = transitions[1,1]
+    g = discount 
+    e = lamb 
+    N = num_arms 
+    p = match_prob 
+    
+    if state == 0:
+        answer = ((a - b)*g*(-e + (-1 + e)*N*p))/((1 + b*g - d*g)* N)
+    else:
+        answer = ((-c + d)*e*g)/((1 + a*g - c*g)*N) + p - e*p
+    
+    return answer     
+
 
 def fast_arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=0.5,match_prob=0.5,match_prob_now=0,num_arms=4):
     """Faster Version of Computing Whittle with multiple probabilities
@@ -457,10 +486,10 @@ def fast_arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_br
     Returns: Whittle Index"""
     
     if state != 1:
-        return arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=lamb,match_prob=match_prob,num_arms=num_arms)
+        return fast_arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=lamb,match_prob=match_prob,num_arms=num_arms)
 
     if match_prob_now > match_prob:
-        return arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=lamb,match_prob=match_prob,num_arms=num_arms) + (match_prob_now-match_prob)*(1-lamb)
+        return fast_arm_compute_whittle(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='combined',lamb=lamb,match_prob=match_prob,num_arms=num_arms) + (match_prob_now-match_prob)*(1-lamb)
     else:
         # Use Explicit Formulas from Solving Q Iteration
         a = transitions[0,0]

@@ -188,6 +188,7 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
 
     for seed in seed_list:
         simulator = create_environment(seed)
+        simulator.time_limit = 100
 
         if is_mcts:
             simulator.mcts_train_iterations = train_iterations

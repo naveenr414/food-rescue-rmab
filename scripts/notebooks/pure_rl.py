@@ -55,9 +55,9 @@ if is_jupyter:
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
     lamb = 0.5
-    prob_distro = 'food_rescue'
-    reward_type = "probability"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 5, 'arm_set_high': 5}
+    prob_distro = 'uniform'
+    reward_type = "max"
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 5}
     policy_lr=5e-3
     value_lr=1e-4
     train_iterations = 30
@@ -218,6 +218,15 @@ if prob_distro == "high_prob":
     max_transition_prob = 1.0
     all_transitions = create_random_transitions(all_population_size,max_transition_prob)
 
+if prob_distro == "one_time":
+    np.random.seed(seed)
+    all_population_size = 100 
+    max_transition_prob = 1.0
+    all_transitions = np.zeros((all_population_size,2,2,2))
+    all_transitions[:,:,1,0] = 1
+    all_transitions[:,1,0,1] = 1
+    all_transitions[:,0,0,0] = 1
+
 
 def create_environment(seed):
     random.seed(seed)
@@ -275,6 +284,16 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
         simulator.policy_lr = policy_lr
         simulator.value_lr = value_lr
         simulator.mcts_depth = 2
+        simulator.shapley_iterations = 1000 
+
+        if prob_distro == "one_time":
+            N = n_arms*volunteers_per_arm
+            simulator.first_init_states = np.array([[[1 for i in range(N)] for i in range(n_episodes)]])
+            random.seed(seed)
+            shuffled_list = [reward_parameters['arm_set_high'] for i in range(2)] + [reward_parameters['arm_set_high'] for i in range(N-2)]
+            random.shuffle(shuffled_list)
+
+            simulator.match_probability_list[simulator.cohort_selection[0]] = shuffled_list
 
         if is_mcts:
             match, active_rate, memory = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=test_length,get_memory=True,per_epoch_function=per_epoch_function)
@@ -401,17 +420,17 @@ results['{}_time'.format(name)] =  rewards['time']
 print(np.mean(rewards['reward']))
 
 # +
-policy = dqn_with_stablization_steps
-name = "dqn_stable_step"
+# policy = dqn_with_stablization_steps
+# name = "dqn_stable_step"
 
-print("Running DQN Step")
+# print("Running DQN Step")
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,avg_reward=np.mean(results['linear_whittle_reward'][0]),test_length=episode_len,num_samples=1024)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
+# rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,avg_reward=np.mean(results['linear_whittle_reward'][0]),test_length=episode_len,num_samples=1024)
+# results['{}_reward'.format(name)] = rewards['reward']
+# results['{}_match'.format(name)] =  rewards['match'] 
+# results['{}_active'.format(name)] = rewards['active_rate']
+# results['{}_time'.format(name)] =  rewards['time']
+# print(np.mean(rewards['reward']))
 # -
 
 if n_arms * volunteers_per_arm <= 4:
