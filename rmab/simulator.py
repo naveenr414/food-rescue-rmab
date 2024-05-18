@@ -796,4 +796,4 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
             for t in range(i*step_size,(i+1)*step_size):
                 reward += combined_reward[epoch,t]*discount**(t-i*step_size)
             all_rewards.append(reward)
-    return np.mean(all_rewards)
+    return all_rewards

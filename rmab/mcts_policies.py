@@ -108,12 +108,23 @@ class MonteCarloTreeSearchNode():
         Returns: Reward/result from the current rollout"""
 
         current_rollout_state = self.state
-        
-        while not current_rollout_state.is_game_over():
-            possible_moves = current_rollout_state.get_legal_actions()
-            action = self.rollout_policy(possible_moves)
-            current_rollout_state = current_rollout_state.move(action) 
-        return current_rollout_state.game_result()
+
+        if not self.state.use_raw_reward:
+            game_rewards = []
+            while not current_rollout_state.is_game_over():
+                game_rewards.append(current_rollout_state.game_result())
+                possible_moves = current_rollout_state.get_legal_actions()
+                action = self.rollout_policy(possible_moves)
+                current_rollout_state = current_rollout_state.move(action) 
+            game_rewards.append(current_rollout_state.game_result())
+            return max(game_rewards,key=lambda k: k[1])
+
+        else:
+            while not current_rollout_state.is_game_over():
+                possible_moves = current_rollout_state.get_legal_actions()
+                action = self.rollout_policy(possible_moves)
+                current_rollout_state = current_rollout_state.move(action) 
+            return current_rollout_state.game_result()
 
     def backpropagate(self, result,action=None):
         """Backpropogation: Update parent nodes with the child node's reward
@@ -148,7 +159,6 @@ class MonteCarloTreeSearchNode():
 
     def rollout_policy(self, possible_moves):  
         if self.use_whittle and random.random() < 0.9:
-            print("HERE!")
             state_WI = self.state.whittle_index 
 
             relevant_WI = [state_WI[i] for i in possible_moves]
@@ -186,9 +196,6 @@ class MonteCarloTreeSearchNode():
                 best_reward = reward 
                 best_action = last_action 
 
-            v.backpropagate(reward)
-
-
             if time.time()-start > self.time_limit:
                 break 
         curr_node = self 
@@ -206,7 +213,6 @@ class MonteCarloTreeSearchNode():
                     curr_node = best_child 
             return actions 
         else:
-            print("HERE 2!")
             return [i for i in range(len(best_action)) if best_action[i] == 1]
     
     def __str__(self):

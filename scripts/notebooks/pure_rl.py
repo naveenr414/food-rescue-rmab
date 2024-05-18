@@ -43,21 +43,21 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 44
+    seed        = 51
     n_arms      = 4
     volunteers_per_arm = 1
     budget      = 2
     discount    = 0.9
     alpha       = 3 
-    n_episodes  = 100
+    n_episodes  = 105
     episode_len = 50 
     n_epochs    = 1
     save_with_date = False 
     TIME_PER_RUN = 0.01 * 1000
     lamb = 0.5
     prob_distro = 'uniform'
-    reward_type = "max"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 5}
+    reward_type = "linear"
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1}
     policy_lr=5e-3
     value_lr=1e-4
     train_iterations = 30
@@ -69,7 +69,7 @@ else:
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
     parser.add_argument('--volunteers_per_arm',         '-V', help='volunteers per arm', type=int, default=5)
     parser.add_argument('--episode_len',    '-H', help='episode length', type=int, default=50)
-    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=100)
+    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=105)
     parser.add_argument('--budget',         '-B', help='budget', type=int, default=3)
     parser.add_argument('--n_epochs',       '-E', help='number of epochs (num_repeats)', type=int, default=1)
     parser.add_argument('--discount',       '-d', help='discount factor', type=float, default=0.9)
@@ -299,6 +299,11 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
             match, active_rate, memory = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=test_length,get_memory=True,per_epoch_function=per_epoch_function)
         else:
             match, active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=False,test_T=test_length,per_epoch_function=per_epoch_function)
+        num_timesteps = match.size
+        match = match.reshape((num_timesteps//episode_len,episode_len))
+        active_rate = active_rate.reshape((num_timesteps//episode_len,episode_len))
+
+ 
         time_whittle = simulator.time_taken
         discounted_reward = get_discounted_reward(match,active_rate,discount,lamb)
         scores['reward'].append(discounted_reward)
@@ -309,7 +314,6 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
             memories.append(memory)
 
     return scores, memories, simulator
-
 
 results = {}
 results['parameters'] = {'seed'      : seed,
@@ -341,7 +345,7 @@ seed_list = [seed]
 policy = whittle_policy
 name = "linear_whittle"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -352,7 +356,7 @@ print(np.mean(rewards['reward']))
 policy = mcts_policy
 name = "mcts"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len,test_iterations=400)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50),test_iterations=400)
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -363,7 +367,7 @@ print(np.mean(rewards['reward']))
 policy = greedy_policy
 name = "greedy"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -374,7 +378,7 @@ print(np.mean(rewards['reward']))
 policy = random_policy
 name = "random"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -385,7 +389,7 @@ print(np.mean(rewards['reward']))
 policy = whittle_activity_policy
 name = "whittle_activity"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -399,7 +403,7 @@ if n_arms*volunteers_per_arm <= 10:
 
     print("Running DQN")
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,avg_reward=np.mean(results['linear_whittle_reward'][0]),test_length=episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,avg_reward=np.mean(results['linear_whittle_reward'][0]),test_length=episode_len*(n_episodes%50))
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
@@ -412,7 +416,7 @@ name = "dqn_step"
 
 print("Running DQN Step")
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,avg_reward=np.mean(results['linear_whittle_reward'][0]),test_length=episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,avg_reward=np.mean(results['linear_whittle_reward'][0]),test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -431,19 +435,20 @@ print(np.mean(rewards['reward']))
 # results['{}_active'.format(name)] = rewards['active_rate']
 # results['{}_time'.format(name)] =  rewards['time']
 # print(np.mean(rewards['reward']))
+
+# +
+# if n_arms * volunteers_per_arm <= 4:
+#     policy = q_iteration_policy
+#     per_epoch_function = q_iteration_custom_epoch()
+#     name = "optimal"
+
+#     rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function,test_length=episode_len*(n_episodes%50))
+#     results['{}_reward'.format(name)] = rewards['reward']
+#     results['{}_match'.format(name)] =  rewards['match'] 
+#     results['{}_active'.format(name)] = rewards['active_rate']
+#     results['{}_time'.format(name)] =  rewards['time']
+#     print(np.mean(rewards['reward']))
 # -
-
-if n_arms * volunteers_per_arm <= 4:
-    policy = q_iteration_policy
-    per_epoch_function = q_iteration_custom_epoch()
-    name = "optimal"
-
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function,test_length=episode_len)
-    results['{}_reward'.format(name)] = rewards['reward']
-    results['{}_match'.format(name)] =  rewards['match'] 
-    results['{}_active'.format(name)] = rewards['active_rate']
-    results['{}_time'.format(name)] =  rewards['time']
-    print(np.mean(rewards['reward']))
 
 # ## Write Data
 

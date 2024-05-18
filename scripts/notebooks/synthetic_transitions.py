@@ -50,7 +50,7 @@ if is_jupyter:
     budget      = 5
     discount    = 0.9
     alpha       = 3 
-    n_episodes  = 1
+    n_episodes  = 105
     episode_len = 50 
     n_epochs    = 1
     save_with_date = False 
@@ -70,7 +70,7 @@ else:
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
     parser.add_argument('--volunteers_per_arm',         '-V', help='volunteers per arm', type=int, default=5)
     parser.add_argument('--episode_len',    '-H', help='episode length', type=int, default=50)
-    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=1)
+    parser.add_argument('--n_episodes',     '-T', help='num episodes', type=int, default=105)
     parser.add_argument('--budget',         '-B', help='budget', type=int, default=3)
     parser.add_argument('--n_epochs',       '-E', help='number of epochs (num_repeats)', type=int, default=1)
     parser.add_argument('--discount',       '-d', help='discount factor', type=float, default=0.9)
@@ -189,6 +189,7 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
     for seed in seed_list:
         simulator = create_environment(seed)
         simulator.time_limit = 100
+        simulator.shapley_iterations = 1000
 
         if is_mcts:
             simulator.mcts_train_iterations = train_iterations
@@ -200,6 +201,11 @@ def run_multi_seed(seed_list,policy,is_mcts=False,per_epoch_function=None,train_
             match, active_rate, memory = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=test_length,get_memory=True,per_epoch_function=per_epoch_function)
         else:
             match, active_rate = run_heterogenous_policy(simulator, n_episodes, n_epochs, discount,policy,seed,lamb=lamb,should_train=True,test_T=test_length,per_epoch_function=per_epoch_function)
+        
+        num_timesteps = match.size
+        match = match.reshape((num_timesteps//episode_len,episode_len))
+        active_rate = active_rate.reshape((num_timesteps//episode_len,episode_len))
+        
         time_whittle = simulator.time_taken
         discounted_reward = get_discounted_reward(match,active_rate,discount,lamb)
         scores['reward'].append(discounted_reward)
@@ -242,7 +248,7 @@ seed_list = [seed]
 policy = greedy_policy
 name = "greedy"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -253,7 +259,7 @@ print(np.mean(rewards['reward']))
 policy = random_policy
 name = "random"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -264,7 +270,7 @@ print(np.mean(rewards['reward']))
 policy = whittle_activity_policy
 name = "whittle_activity"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -275,29 +281,7 @@ print(np.mean(rewards['reward']))
 policy = whittle_policy
 name = "linear_whittle"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
-# -
-
-if prob_distro == "fixed":
-    match_probs = simulator.match_probability_list[simulator.agent_idx]
-    avg_combo_ratio = []
-    for i in combinations(match_probs,budget):
-        s = set()
-        for j in i:
-            s = s.union(j)
-        avg_combo_ratio.append(len(s)/sum([len(j) for j in i]))
-    results['ratio'] = np.mean(avg_combo_ratio)
-
-# +
-policy = whittle_greedy_policy
-name = "greedy_whittle"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -310,7 +294,7 @@ if n_arms * volunteers_per_arm <= 4:
     per_epoch_function = q_iteration_custom_epoch()
     name = "optimal"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function,test_length=n_episodes*episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,per_epoch_function=per_epoch_function,test_length=episode_len*(n_episodes%50))
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
@@ -321,7 +305,7 @@ if n_arms * volunteers_per_arm <= 4:
 policy = shapley_whittle_custom_policy 
 name = "shapley_whittle_custom"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -329,10 +313,21 @@ results['{}_time'.format(name)] =  rewards['time']
 print(np.mean(rewards['reward']))
 
 # +
+policy = mcts_linear_policy
+name = "mcts_linear"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=episode_len*(n_episodes%50))
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+np.mean(rewards['reward'])
+
+# +
 policy = mcts_shapley_policy
 name = "mcts_shapley"
 
-rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=n_episodes*episode_len)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,is_mcts=True,test_iterations=400,test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
@@ -344,30 +339,18 @@ if n_arms * volunteers_per_arm <= 20:
     policy = whittle_iterative_policy
     name = "iterative_whittle"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=n_episodes*episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
     np.mean(rewards['reward'])
 
-# +
-policy = greedy_whittle_iterative_policy
-name = "greedy_iterative_whittle"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=n_episodes*episode_len)
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-np.mean(rewards['reward'])
-# -
-
 if n_arms * volunteers_per_arm <= 20:
     policy = shapley_whittle_iterative_policy
     name = "shapley_iterative_whittle"
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=n_episodes*episode_len)
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,test_iterations=400,test_length=episode_len*(n_episodes%50))
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
