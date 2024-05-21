@@ -7,7 +7,6 @@ from rmab.uc_whittle import Memoizer
 from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, fast_arm_compute_whittle, get_q_vals, fast_arm_compute_whittle_multi_prob
 from rmab.utils import binary_to_decimal, custom_reward, one_hot, one_hot_fixed
 from itertools import combinations
-from rmab.simulator import generate_random_context
 
 import torch
 import torch.nn as nn

@@ -1,7 +1,7 @@
 import gym
 import numpy as np
 import gymnasium.spaces as spaces
-from rmab.fr_dynamics import get_db_data, train_rf,  get_match_probabilities
+from rmab.fr_dynamics import get_db_data, train_rf,  get_match_probabilities, get_food_rescue, get_food_rescue_top
 from rmab.utils import custom_reward
 import random
 import torch 
@@ -58,7 +58,7 @@ class RMABSimulator(gym.Env):
     '''
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
-            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],TIME_PER_RUN=10.0,contextual=False):
+            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],contextual=False):
         '''
         Initialization
         '''
@@ -76,7 +76,6 @@ class RMABSimulator(gym.Env):
         self.n_instances     = n_instances  # n_epochs: number of separate transitions / instances
         self.reward_style = reward_style # Should we get reward style based on states or matches
         self.match_probability_list = match_probability_list
-        self.TIME_PER_RUN = TIME_PER_RUN
         self.contextual = contextual 
         self.test_epochs = 0
         self.train_epochs = 0
@@ -265,237 +264,10 @@ class RMABSimulator(gym.Env):
             else:
                 return custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type,self.reward_parameters)
 
-class RMABSimulatorContextual(gym.Env):
-    '''
-    This simulator simulates the interaction with a set of arms with unknown transition probabilities
-    but with additional side information. This setup is aligned with restless multi-armed bandit problems
-    where we do not have repeated access to the same set of arms, but instead a set of new arms may
-    arrive in the next iteration with side information transferable between different iiterations.
-
-    The inputs of the simulator are listed below:
-
-        all_population: the total number of arms in the entire population
-        all_features: this is a numpy array with shape (all_population, feature_size)
-        all_transitions: this is a numpy array with shape (all_population, 2, 2)
-                        state (NE, E), action (NI, I), next state (E)
-        cohort_size: the number of arms arrive per iteration as a cohort
-        episode_len: the total number of time steps per episode iteration
-        budget: the number of arms that can be pulled in a time step
-
-
-    This simulation supports two different setting of the features:
-        - When features are multi-dimensional, the problem is a restless multi-armed bandit problem with
-        side information.
-        - When features are just single-dimensional with discrete values, the problem is a restless
-        multi-armed bandit problem with group information.
-        - In the extreme case where the group information is completely disjoint, it is the same as a
-        restless multi-armed bandit problem with no information.
-
-    '''
-
-    def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
-            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],TIME_PER_RUN=10.0,contextual=False):
-        '''
-        Initialization
-        '''
-
-        self.all_population  = all_population
-        self.all_features    = all_features
-        self.all_transitions = all_transitions
-        self.cohort_size     = cohort_size
-        self.volunteers_per_arm = volunteers_per_arm
-        self.budget          = budget
-        self.number_states   = number_states
-        self.episode_len     = episode_len
-        self.discount = discount
-        self.n_episodes      = n_episodes   # total number of episodes per epoch
-        self.n_instances     = n_instances  # n_epochs: number of separate transitions / instances
-        self.reward_style = reward_style # Should we get reward style based on states or matches
-        self.match_probability_list = match_probability_list
-        self.TIME_PER_RUN = TIME_PER_RUN
-        self.contextual = contextual 
-        self.test_epochs = 0
-        self.train_epochs = 0
-        self.power = None # For the submodular runs 
-        self.avg_reward = 5
-        self.reward_type = "probability"
-        self.reward_parameters = {}
-
-        self.match_probability_list = np.array(self.match_probability_list)
-
-        assert_valid_transition(all_transitions)
-
-        # set up options for the multiple instances
-        # track the first random initial state
-        self.instance_count = 0
-        self.episode_count  = 0
-        self.timestep       = 0
-        self.total_active = 0
-        self.context_dim = 15
-
-        # track indices of cohort members
-        self.cohort_selection  = np.zeros((n_instances, cohort_size)).astype(int)
-        self.first_init_states = np.zeros((n_instances, n_episodes, cohort_size*volunteers_per_arm)).astype(int)
-        for i in range(n_instances):
-            self.cohort_selection[i, :] = np.random.choice(a=self.all_population, size=self.cohort_size, replace=False)
-            print('cohort', self.cohort_selection[i, :])
-            for ep in range(n_episodes):
-                self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size*self.volunteers_per_arm,prob=0.5)
-
-        self.all_match_probabilities = []
-        for i in range(n_instances):
-            instance_probabilities = []
-
-            for ep in range(self.n_episodes*self.episode_len):
-                rand_num = np.random.uniform(0,1)
-                probabilities = [1-abs(p-rand_num) for p in self.match_probability_list]
-                instance_probabilities.append(probabilities)
-
-            self.all_match_probabilities.append(instance_probabilities)
-        
-        self.all_match_probabilities = np.array(self.all_match_probabilities)
-        self.current_episode_match_probs = self.all_match_probabilities[0]
-
-    def reset_all(self):
-        self.instance_count = -1
-        self.total_active = 0
-
-        return self.reset_instance()
-
-    def get_average_prob(self,volunteer_num):
-        """Get the average match probability across trials
-        
-        Arguments:
-            volunteer_context: Some feature vector, representing volutneers
-            Trials: Number of trials to average over
-            
-        Returns: Average probability, [0,1] float"""
-
-        return np.mean(self.current_episode_match_probs[:,volunteer_num])
-
-    def reset_instance(self):
-        """ reset to a new environment instance """
-        self.instance_count += 1
-
-        # get new cohort members
-        self.cohort_idx       = self.cohort_selection[self.instance_count, :]
-        self.agent_idx = []
-
-        self.current_episode_match_probs = self.all_match_probabilities[self.instance_count]
-
-        for idx in self.cohort_idx:
-            volunteer_ids = [idx*self.volunteers_per_arm+i for i in range(self.volunteers_per_arm)]
-            self.agent_idx += volunteer_ids
-
-        self.features    = self.all_features[self.cohort_idx]
-        self.transitions = self.all_transitions[self.cohort_idx] # shape: cohort_size x n_states x 2 x n_states
-        self.episode_count = 0
-
-        # current state initialization
-        self.timestep    = 0
-        self.states      = self.first_init_states[self.instance_count, self.episode_count, :]  # np.copy??
-        return self.observe()
-
-    def reset(self):
-        self.timestep      = 0
-        self.episode_count += 1
-        self.states        = self.first_init_states[self.instance_count, self.episode_count, :]
-        print(f'instance {self.instance_count}, ep {self.episode_count}')
-
-        return self.observe()
-
-    def fresh_reset(self):
-        '''
-        This function resets the environment to start over the interaction with arms. The main purpose of
-        this function is to sample a new set of arms (with number_arms arms) from the entire population.
-        This corresponds to an episode of the restless multi-armed bandit setting but with different
-        setup during each episode.
-
-        This simulator also supports infinite time horizon by setting the episode_len to infinity.
-        '''
-
-        # Sampling
-        sampled_arms     = np.random.choice(a=self.all_population, size=self.cohort_size, replace=False)
-        self.features    = self.all_features[sampled_arms]
-        self.transitions = self.all_transitions[sampled_arms] # shape: cohort_size x n_states x 2 x n_states
-
-        # Current state initialization
-        self.timestep    = 0
-        self.states      = self.sample_initial_states(self.cohort_size)
-
-        return self.observe()
-
-    def sample_initial_states(self, cohort_size, prob=0.5):
-        '''
-        Sampling initial states at random.
-        Input:
-            cohort_size: the number of arms to be initialized
-            prob: the probability of sampling 0 (not engaging state)
-        '''
-        states = np.random.choice(a=self.number_states, size=cohort_size, p=[prob, 1-prob])
-        return states
-
-    def is_terminal(self):
-        if self.timestep >= self.episode_len:
-            return True
-        else:
-            return False
-
-    def get_features(self):
-        return self.features
-
-    def observe(self):
-        return self.states
-
-    def step(self, action):
-        assert len(action) == self.cohort_size*self.volunteers_per_arm
-        assert np.sum(action) <= self.budget
-
-        reward = self.get_reward(action)
-
-        next_states = np.zeros(self.cohort_size*self.volunteers_per_arm)
-        for i in range(self.cohort_size):
-            for j in range(self.volunteers_per_arm):
-                idx = i*self.volunteers_per_arm + j
-                prob = self.transitions[i, self.states[idx], action[idx], :]
-                next_state = np.random.choice(a=self.number_states, p=prob)
-                next_states[idx] = next_state
-
-        self.states = next_states.astype(int)
-        self.timestep += 1
-
-        done = self.is_terminal()
-
-        # print(f'  action {action}, sum {action.sum()}, reward {reward}')
-
-        return self.observe(), reward, done, {}
-
-    def get_reward(self,action=None):
-        if action is None:
-            return 0
-        else:
-            current_match_probs = self.current_episode_match_probs[self.timestep + self.episode_count*self.episode_len,self.agent_idx]
-            reward = custom_reward(self.states,action,current_match_probs,self.reward_type,self.reward_parameters)
-            return reward 
-
-
 def random_transition(all_population, n_states, n_actions):
     all_transitions = np.random.random((all_population, n_states, n_actions, n_states))
     all_transitions = all_transitions / np.sum(all_transitions, axis=-1, keepdims=True)
     return all_transitions
-
-def generate_random_context(ndim):
-    """Generate a random vector on the surface
-        of an ndim unit sphere
-        
-    Arguments:
-        ndim: How many dimensions vector should have
-
-    Returns: Numpy vector of size ndim"""
-    vec = np.random.randn(ndim)
-    vec /= np.linalg.norm(vec, axis=0)
-    return vec
-
 
 def assert_valid_transition(transitions):
     """ check that acting is always good, and starting in good state is always good """
@@ -551,7 +323,6 @@ def random_valid_transition(all_population, n_states, n_actions):
 
     # return transitions
     return full_transitions
-
 
 
 def random_valid_transition_round_down(all_population, n_states, n_actions):
@@ -797,3 +568,139 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
                 reward += combined_reward[epoch,t]*discount**(t-i*step_size)
             all_rewards.append(reward)
     return all_rewards
+
+def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
+    np.random.seed(seed)
+    probs_by_partition = []
+    if prob_distro == "uniform":
+        all_population_size = 100 
+        all_transitions = create_random_transitions(all_population_size,max_transition_prob)
+    elif prob_distro == "food_rescue":
+        all_population_size = 100 
+        all_transitions, probs_by_partition = get_food_rescue(all_population_size)
+    elif prob_distro == "food_rescue_top":
+        all_population_size = 20 
+        all_transitions, probs_by_partition = get_food_rescue_top(all_population_size)
+    elif prob_distro == "high_prob":
+        all_population_size = 100 
+        max_transition_prob = 1.0
+        all_transitions = create_random_transitions(all_population_size,max_transition_prob)
+    elif prob_distro == "one_time":
+        all_population_size = 100 
+        all_transitions = np.zeros((all_population_size,2,2,2))
+        all_transitions[:,:,1,0] = 1
+        all_transitions[:,1,0,1] = 1
+        all_transitions[:,0,0,0] = 1
+    else:
+        raise Exception("Probability distribution {} not found".format(prob_distro))
+    
+    return all_transitions, probs_by_partition
+
+def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition):
+    if reward_type == "set_cover":
+        if prob_distro == "fixed":
+            match_probabilities = []
+            set_sizes = [int(reward_parameters['arm_set_low']) for i in range(N)]
+            for i in range(N):
+                s = set() 
+                while len(s) < set_sizes[i]:
+                    s.add(np.random.randint(0,reward_parameters['universe_size']))
+                match_probabilities.append(s)
+        else:
+            set_sizes = [np.random.randint(int(reward_parameters['arm_set_low']),int(reward_parameters['arm_set_high'])+1) for i in range(N)]
+            match_probabilities = [] 
+            
+            for i in range(N):
+                temp_set = set() 
+                
+                while len(temp_set) < set_sizes[i]:
+                    temp_set.add(np.random.randint(0,reward_parameters['universe_size']))
+                match_probabilities.append(temp_set)
+    elif prob_distro == "food_rescue" or prob_distro == "food_rescue_top":
+        match_probabilities = [np.random.choice(probs_by_partition[i//parameters['volunteers_per_arm']]) for i in range(N)] 
+    else:
+        match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
+    return match_probabilities
+
+def create_environment(parameters):
+    seed = parameters['seed']
+    prob_distro = parameters['prob_distro']
+    volunteers_per_arm = parameters['volunteers_per_arm']
+    reward_type = parameters['reward_type']
+    reward_parameters = {'universe_size': parameters['universe_size'],
+        'arm_set_low': parameters['arm_set_low'], 
+        'arm_set_high': parameters['arm_set_high']}
+    discount = parameters['discount']
+    n_arms = parameters['n_arms']
+    episode_len = parameters['episode_len']
+    n_epochs = parameters['n_epochs']
+    n_episodes = parameters['n_episodes']
+    budget = parameters['budget']
+
+    all_transitions,probs_by_partition = create_transitions_from_prob(prob_distro,seed)
+    all_population_size = len(all_transitions)
+
+    random.seed(seed)
+    np.random.seed(seed)
+
+    all_features = np.arange(all_population_size)
+    N = all_population_size*volunteers_per_arm
+
+    match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition)
+
+    simulator = RMABSimulator(all_population_size, all_features, all_transitions,
+                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=2, reward_style='custom',match_probability_list=match_probabilities)
+
+    if parameters['prob_distro'] == "one_time":
+        N = parameters['n_arms']*parameters['volunteers_per_arm']
+        simulator.first_init_states = np.array([[[1 for i in range(N)] for i in range(parameters['n_episodes'])]])
+        random.seed(seed)
+        shuffled_list = [parameters['arm_set_high'] for i in range(2)] + [parameters['arm_set_high'] for i in range(N-2)]
+        random.shuffle(shuffled_list)
+
+        simulator.match_probability_list[simulator.cohort_selection[0]] = shuffled_list
+
+    simulator.reward_type = parameters['reward_type'] 
+    simulator.reward_parameters = {'universe_size': parameters['universe_size'],
+    'arm_set_low': parameters['arm_set_low'], 
+    'arm_set_high': parameters['arm_set_high']} 
+    simulator.time_limit = parameters['time_limit']
+    
+    return simulator 
+
+def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_function=None,avg_reward=0,mcts_test_iterations=400,mcts_depth=2,num_samples=100,shapley_iterations=1000,test_length=20):
+    memories = []
+    scores = {
+        'reward': [],
+        'time': [], 
+        'match': [], 
+        'active_rate': [],
+    }
+
+    for seed in seed_list:
+        simulator = create_environment(parameters)
+        simulator.avg_reward = avg_reward
+        simulator.num_samples = num_samples
+        simulator.mcts_test_iterations = mcts_test_iterations
+        simulator.mcts_depth = mcts_depth
+        simulator.shapley_iterations = shapley_iterations  
+
+        policy_results = run_heterogenous_policy(simulator, parameters['n_episodes'], parameters['n_epochs'], parameters['discount'],policy,seed,lamb=parameters['lamb'],should_train=should_train,test_T=test_length,get_memory=should_train,per_epoch_function=per_epoch_function)
+
+        if should_train:
+            memory = policy_results[2]
+
+        match, active_rate = policy_results[0], policy_results[1]
+        num_timesteps = match.size
+        match = match.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
+        active_rate = active_rate.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
+        time_whittle = simulator.time_taken
+        discounted_reward = get_discounted_reward(match,active_rate,parameters['discount'],parameters['lamb'])
+        scores['reward'].append(discounted_reward)
+        scores['time'].append(time_whittle)
+        scores['match'].append(np.mean(match))
+        scores['active_rate'].append(np.mean(active_rate))
+        if should_train:
+            memories.append(memory)
+
+    return scores, memories, simulator

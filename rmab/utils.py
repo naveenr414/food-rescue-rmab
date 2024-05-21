@@ -7,6 +7,8 @@ import secrets
 from scipy.stats import norm, beta
 import scipy.stats as st
 import math
+import torch
+import resource 
 
 
 def get_stationary_distribution(P):
@@ -421,3 +423,27 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
         return np.sum(probs)
     else:
         raise Exception("Reward type {} not found".format(custom_reward_type))  
+
+def partition_volunteers(probs_by_num,num_by_section):
+    total = sum([len(probs_by_num[i]) for i in probs_by_num])
+    num_per_section = total//num_by_section
+
+    nums_by_partition = []
+    current_count = 0
+    current_partition = []
+
+    keys = sorted(probs_by_num.keys())
+
+    for i in keys:
+        if current_count >= num_per_section*(len(nums_by_partition)+1):
+            nums_by_partition.append(current_partition)
+            current_partition = []
+        
+        current_partition.append(i)
+        current_count += len(probs_by_num[i])
+    return nums_by_partition
+
+def restrict_resources():
+    torch.cuda.set_per_process_memory_fraction(0.5)
+    torch.set_num_threads(1)
+    resource.setrlimit(resource.RLIMIT_AS, (30 * 1024 * 1024 * 1024, -1))

@@ -265,7 +265,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     Returns: Numpy array, action"""        
     # Hyperparameters + Parameters 
     
-    value_lr = env.value_lr 
+    value_lr = 1e-4 
     train_epochs = env.train_epochs
 
     N = len(state) 
