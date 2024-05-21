@@ -1,24 +1,14 @@
-from rmab.mcts_policies import get_reward, get_reward_max, get_reward_custom
+from rmab.mcts_policies import get_reward_custom
 import numpy as np
 import random 
-
-from rmab.utils import Memoizer
-from rmab.whittle_policies import whittle_index, shapley_index_custom, shapley_whittle_custom_policy
-from rmab.utils import custom_reward, binary_to_decimal, list_to_binary
-from rmab.compute_whittle import get_q_vals, arm_compute_whittle, arm_compute_whittle_multi_prob
 
 from copy import deepcopy
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from collections import Counter
-import gc 
 import time
-from sklearn.cluster import KMeans
 import torch.nn.functional as F
-from collections import defaultdict 
-import math 
 import torch.optim.lr_scheduler as lr_scheduler
 
 
@@ -42,7 +32,6 @@ class MLP(nn.Module):
         return x
 
 class DQN(nn.Module):
-
     def __init__(self, n_observations, n_actions):
         super(DQN, self).__init__()
         self.layer1 = nn.Linear(n_observations, 128)
@@ -171,7 +160,7 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
         for target_param, local_param in zip(target_model.parameters(), q_network.parameters()):
                 target_param.data.copy_(tau*local_param.data+(1-tau)*target_param.data)
 
-    
+
     # # Compute the best action
     action_values = q_network(torch.Tensor([state]))[0]
 
@@ -232,25 +221,6 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
     memory = past_states, past_actions, past_rewards, past_probs, q_losses, q_network, criterion, optimizer, target_model, current_epoch, all_future_states, corresponding_nums, avg_rewards
 
     return action, memory
-
-
-
-def dqn_stable_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
-    return dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True)
-
-def dqn_policy_greedy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
-    return dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",greedy_eval=True)
-
-def dqn_with_stablization_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
-    return dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True)
-
-def dqn_max_with_stablization_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
-    return dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True,use_max=True)
-
-def dqn_max_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
-    return dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",use_max=True)
-
-
 
 def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=False,use_max=False):
     """Use a DQN policy to compute the action values
@@ -425,3 +395,45 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     memory = past_states, past_actions, past_final_actions, past_rewards, past_probs, past_next_states, q_losses, q_network, criterion, optimizer, target_model, current_epoch, all_future_states, corresponding_nums,scheduler,  avg_rewards
 
     return action, memory
+
+def dqn_policy_greedy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    """Use a DQN policy + greedily select arms 
+    
+    Arguments: 
+        env: Simulator Environment
+        state: Num Agents x 2 numpy array (0-1)
+        budget: Integer, how many arms we can pull
+        Lamb: Balance between engagement, global reward
+        Memory: Contains the V, Pi network
+        per_epoch_results: Optional argument, nothing for this 
+    Returns: Numpy array, action"""        
+
+    return dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",greedy_eval=True)
+
+def dqn_stable_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    """Use a DQN + Stabilize the policy by averaging over different combinations of actions
+    
+    Arguments: 
+        env: Simulator Environment
+        state: Num Agents x 2 numpy array (0-1)
+        budget: Integer, how many arms we can pull
+        Lamb: Balance between engagement, global reward
+        Memory: Contains the V, Pi network
+        per_epoch_results: Optional argument, nothing for this 
+    Returns: Numpy array, action"""        
+
+    return dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True)
+
+def dqn_with_stablization_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    """Use a DQN policy while letting the actions be one arm, and stabilize this
+    
+    Arguments: 
+        env: Simulator Environment
+        state: Num Agents x 2 numpy array (0-1)
+        budget: Integer, how many arms we can pull
+        Lamb: Balance between engagement, global reward
+        Memory: Contains the V, Pi network
+        per_epoch_results: Optional argument, nothing for this 
+    Returns: Numpy array, action"""        
+
+    return dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",stabilization=True)

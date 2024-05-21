@@ -2,24 +2,12 @@ import numpy as np
 import random 
 
 from rmab.utils import Memoizer
-from rmab.whittle_policies import whittle_index, shapley_index_custom, shapley_whittle_custom_policy, whittle_policy
+from rmab.whittle_policies import whittle_index, shapley_index_custom
 from rmab.baseline_policies import random_policy
-from rmab.utils import custom_reward, binary_to_decimal, list_to_binary, one_hot
+from rmab.utils import custom_reward, one_hot
 from rmab.compute_whittle import get_multi_Q
 
-from copy import deepcopy
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from collections import Counter
-import gc 
 import time
-from sklearn.cluster import KMeans
-import torch.nn.functional as F
-from collections import defaultdict 
-import math 
-import torch.optim.lr_scheduler as lr_scheduler
 
 def get_reward(state,action,match_probs,lamb):
     prod_state = 1-state*action*np.array(match_probs)
@@ -383,61 +371,6 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
 
     return action, memory 
 
-def mcts_whittle_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
-    """Use the MCTS Policy, but use Whittle indices as the rollout 
-    
-    Arguments: 
-        env: Simulator Environment
-        state: Num Agents x 2 numpy array (0-1)
-        budget: Integer, how many arms we can pull
-        Lamb: Balance between engagement, global reward
-        Memory: Contains the V, Pi network
-        per_epoch_results: Optional argument, nothing for this 
-
-    Returns: 0-1 list of arms to pull"""
-
-    return mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup=group_setup,use_whittle=True)    
-
-def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
-    """Leverage Shapley values + MCTS to compute indices 
-    Basically uses MCTS to compute the potential rewards immideatly
-    Then uses Shapley indices to estimate future rewards
-    This leads to index computation
-    
-    Arguments: 
-        env: Simulator Environment
-        state: Num Agents x 2 numpy array (0-1)
-        budget: Integer, how many arms we can pull
-        Lamb: Balance between engagement, global reward
-        Memory: Contains the V, Pi network
-        per_epoch_results: Optional argument, nothing for this 
-
-    Returns: 0-1 list of arms to pull"""
-    
-    N = len(state)
-    rollout = budget
-    match_probs = np.array(env.match_probability_list)[env.agent_idx]
-    state_actions = []
-
-    if memory == None:
-        memory = Memoizer('optimal'),np.array(shapley_index_custom(env,np.ones(len(env.agent_idx)),{})[0])
-
-        for i in range(2):
-            s = [i for _ in range(len(state))]
-            whittle_index(env,s,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1])
-
-    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env,shapley=True)
-    s.attribution_method = attribution_method 
-    s.previous_state_actions = state_actions
-    s.memory = memory 
-    s.per_epoch_results = per_epoch_results
-    s.whittle_index = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1])
-    root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,time_limit=env.time_limit,use_whittle=True)
-    selected_idx = root.best_action(budget)
-    memory = s.memory 
-    action = np.zeros(N, dtype=np.int8)
-    action[selected_idx] = 1    
-    return action, memory
 
 def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
     """Leverage Shapley values + MCTS to compute indices 
@@ -480,9 +413,8 @@ def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setu
     
     return action, memory
 
-
-def mcts_shapley_contextual_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
-    """Leverage Shapley values + MCTS to compute indices 
+def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
+    """Leverage Shapley values + MCTS to compute indices + rollout 
     Basically uses MCTS to compute the potential rewards immideatly
     Then uses Shapley indices to estimate future rewards
     This leads to index computation
@@ -505,54 +437,19 @@ def mcts_shapley_contextual_policy(env,state,budget,lamb,memory,per_epoch_result
     if memory == None:
         memory = Memoizer('optimal'),np.array(shapley_index_custom(env,np.ones(len(env.agent_idx)),{})[0])
 
-    s = StateActionContextual(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env,shapley=True)
+        for i in range(2):
+            s = [i for _ in range(len(state))]
+            whittle_index(env,s,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1])
+
+    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env,shapley=True)
     s.attribution_method = attribution_method 
     s.previous_state_actions = state_actions
     s.memory = memory 
     s.per_epoch_results = per_epoch_results
-    root = MonteCarloTreeSearchNodeContextual(s,env.mcts_test_iterations,transitions=env.transitions)
+    s.whittle_index = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1])
+    root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,time_limit=env.time_limit,use_whittle=True)
     selected_idx = root.best_action(budget)
     memory = s.memory 
     action = np.zeros(N, dtype=np.int8)
-    action[selected_idx] = 1
-
+    action[selected_idx] = 1    
     return action, memory
-
-
-def mcts_shapley_attributions_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
-    """Use Shapley values for attributions in the mcts_shapley_policy"""
-    return mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="shapley")
-
-def get_attributions(state,action,match_probs,lamb,shapley_indices,reward_type,reward_parameters,attribution_method="proportional"):
-    """Detemrine how much reward to give to each action
-    
-    Arguments:  
-        state: Numpy array of length N, 0-1
-        action: Numpy array of length N, 0-1
-        match_probs: Marginal values for each arm
-        lamb: Float, balance between matching, engagement
-        shapley_indices: Computed impact of each arm"""
-
-    if attribution_method == "proportional":
-        reward = get_reward_custom(state,action,match_probs,lamb,reward_type,reward_parameters)
-        reward -= lamb*np.sum(state)/len(state)
-        memory_shapley_normalized = shapley_indices*state*action 
-        if np.sum(memory_shapley_normalized) > 0:
-            memory_shapley_normalized /= np.sum(memory_shapley_normalized)
-        memory_shapley_normalized *= reward  
-        return memory_shapley_normalized
-    elif attribution_method == "shapley":
-        shapley_values = []
-        for i in range(len(action)):
-            if state[i]*action[i] == 0:
-                shapley_values.append(0)
-            else:
-                action_copy = deepcopy(action)
-                action_copy[i] = 0
-                reward_difference = get_reward_custom(state,action,match_probs,lamb,reward_type,reward_parameters)
-                reward_difference -= get_reward_custom(state,action_copy,match_probs,lamb,reward_type,reward_parameters)
-                shapley_values.append(reward_difference)
-        return np.array(shapley_values)
-    else:
-        raise Exception("Method {} not found".format(attribution_method))
-

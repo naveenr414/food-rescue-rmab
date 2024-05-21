@@ -2187,6 +2187,21 @@ def update_policy_function(past_states,past_actions,policy_losses,policy_network
 
     policy_losses.append(total_policy_loss)
 
+def mcts_whittle_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"):
+    """Use the MCTS Policy, but use Whittle indices as the rollout 
+    
+    Arguments: 
+        env: Simulator Environment
+        state: Num Agents x 2 numpy array (0-1)
+        budget: Integer, how many arms we can pull
+        Lamb: Balance between engagement, global reward
+        Memory: Contains the V, Pi network
+        per_epoch_results: Optional argument, nothing for this 
+
+    Returns: 0-1 list of arms to pull"""
+
+    return mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup=group_setup,use_whittle=True)    
+
 def get_best_combo(last_prefixes):
     """Using the data we've seen from the MCTS run, determine which combo of arms to pull
     
