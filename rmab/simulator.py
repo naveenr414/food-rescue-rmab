@@ -3,31 +3,10 @@ import numpy as np
 import gymnasium.spaces as spaces
 from rmab.fr_dynamics import get_db_data, train_rf,  get_match_probabilities, get_food_rescue, get_food_rescue_top
 from rmab.utils import custom_reward
+from rmab.baseline_policies import random_policy
 import random
 import torch 
 import time 
-
-def random_policy(env,state,budget,lamb,memory, per_epoch_results):
-    """Random policy that randomly notifies budget arms
-    
-    Arguments:
-        env: Simulator environment
-        state: Numpy array with 0-1 states for each agent
-        budget: Integer, max agents to select
-        lamb: Lambda, float, tradeoff between matching vs. activity
-        memory: Any information passed from previous epochs; unused here
-        per_epoch_results: Any information computed per epoch; unused here
-    
-    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
-
-
-    N = len(state)
-    selected_idx = random.sample(list(range(N)), budget)
-    action = np.zeros(N, dtype=np.int8)
-    action[selected_idx] = 1
-
-    return action, None
-
 
 class RMABSimulator(gym.Env):
     '''
@@ -45,7 +24,9 @@ class RMABSimulator(gym.Env):
         cohort_size: the number of arms arrive per iteration as a cohort
         episode_len: the total number of time steps per episode iteration
         budget: the number of arms that can be pulled in a time step
-
+        discount: \gamma, the discount rate for rewards
+        reward_style: String, if it is 'state', then we use R_{i}, and if it is 'custom', then we use R_{glob}
+        match_probability_list: List of p_{i}(s_{i}) for s_{i}=1
 
     This simulation supports two different setting of the features:
         - When features are multi-dimensional, the problem is a restless multi-armed bandit problem with
@@ -58,7 +39,7 @@ class RMABSimulator(gym.Env):
     '''
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
-            discount,number_states=2,reward_style='state',match_probability=0.5,match_probability_list = [],contextual=False):
+            discount,number_states=2,reward_style='state',match_probability_list = []):
         '''
         Initialization
         '''
@@ -76,7 +57,6 @@ class RMABSimulator(gym.Env):
         self.n_instances     = n_instances  # n_epochs: number of separate transitions / instances
         self.reward_style = reward_style # Should we get reward style based on states or matches
         self.match_probability_list = match_probability_list
-        self.contextual = contextual 
         self.test_epochs = 0
         self.train_epochs = 0
         self.power = None # For the submodular runs 
@@ -94,7 +74,6 @@ class RMABSimulator(gym.Env):
         self.episode_count  = 0
         self.timestep       = 0
         self.total_active = 0
-        self.context_dim = 15
 
         # track indices of cohort members
         self.cohort_selection  = np.zeros((n_instances, cohort_size)).astype(int)
@@ -104,23 +83,6 @@ class RMABSimulator(gym.Env):
             print('cohort', self.cohort_selection[i, :])
             for ep in range(n_episodes):
                 self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size*self.volunteers_per_arm,prob=0.5)
-
-        if contextual: 
-            if len(self.match_probability_list) > 0:
-                self.all_match_probabilities = self.match_probability_list
-            else:
-                donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
-                rf_classifier, evaluation = train_rf()
-                self.all_match_probabilities = np.zeros((n_instances,n_episodes*episode_len,100 * self.volunteers_per_arm))
-                self.all_context_features = np.zeros((n_instances,n_episodes*episode_len,100 * self.volunteers_per_arm,15))
-
-                for i in range(n_instances):
-                    self.all_match_probabilities[i], self.all_context_features[i]  = get_match_probabilities(n_episodes*episode_len,
-                                        self.volunteers_per_arm,[i for i in range(1,101)],
-                                        rf_classifier, rescues_by_user,all_rescue_data,
-                                        donation_id_to_latlon, recipient_location_to_latlon, 
-                                        user_id_to_latlon)
-            self.current_episode_match_probs = self.all_match_probabilities[0]
 
     def reset_all(self):
         self.instance_count = -1
@@ -146,9 +108,6 @@ class RMABSimulator(gym.Env):
         # get new cohort members
         self.cohort_idx       = self.cohort_selection[self.instance_count, :]
         self.agent_idx = []
-
-        if self.contextual:
-            self.current_episode_match_probs = self.all_match_probabilities[self.instance_count]
 
         for idx in self.cohort_idx:
             volunteer_ids = [idx*self.volunteers_per_arm+i for i in range(self.volunteers_per_arm)]
@@ -233,8 +192,6 @@ class RMABSimulator(gym.Env):
 
         done = self.is_terminal()
 
-        # print(f'  action {action}, sum {action.sum()}, reward {reward}')
-
         return self.observe(), reward, done, {}
 
     def get_reward(self,action=None):
@@ -245,10 +202,7 @@ class RMABSimulator(gym.Env):
                 return 0
             else:
                 self.total_active += np.sum(self.states)
-                if self.contextual:
-                    prod_state = 1-self.states*action*np.array(self.current_episode_match_probs[self.timestep + self.episode_count*self.episode_len])[self.agent_idx]
-                else:
-                    prod_state = 1-self.states*action*np.array(self.match_probability_list)[self.agent_idx]
+                prod_state = 1-self.states*action*np.array(self.match_probability_list)[self.agent_idx]
                 prob_all_inactive = np.prod(prod_state)
                 return 1-prob_all_inactive 
         elif self.reward_style == 'submodular': 
@@ -264,13 +218,18 @@ class RMABSimulator(gym.Env):
             else:
                 return custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type,self.reward_parameters)
 
-def random_transition(all_population, n_states, n_actions):
-    all_transitions = np.random.random((all_population, n_states, n_actions, n_states))
-    all_transitions = all_transitions / np.sum(all_transitions, axis=-1, keepdims=True)
-    return all_transitions
-
 def assert_valid_transition(transitions):
-    """ check that acting is always good, and starting in good state is always good """
+    """Determine if a set of transitions is valid;
+        Check that acting is always good, and starting in good state is always good 
+    
+    Arguments: 
+        transitions: Numpy array of size Nx2x2x2
+    
+    Returns: Nothing
+    
+    Side Effects: Prints out if any transitions don't match the assumptions
+        of P_{i}(1,a,1) > P(0,a,1)
+        or P_{i}(s,0,1) > P(s,1,1)"""
 
     bad = False
     N, n_states, n_actions, _ = transitions.shape
@@ -292,112 +251,12 @@ def assert_valid_transition(transitions):
                 print(f'good start state should always be good! {transitions[i,1,a,1]:.3f} < {transitions[i,0,a,1]:.3f}')
     # assert bad != True
 
-
-def random_valid_transition(all_population, n_states, n_actions):
-    """ set initial transition probabilities
-    returns array (N, S, A) that shows probability of transitioning to a **good** state
-
-    enforce "valid" transitions: acting is always good, and starting in good state is always good """
-
-    assert n_actions == 2
-
-    transitions = np.random.random((all_population, n_states, n_actions))
-
-    for i in range(all_population):
-        for s in range(n_states):
-            # ensure acting is always good
-            if transitions[i,s,1] < transitions[i,s,0]:
-                diff = 1 - transitions[i,s,0]
-                transitions[i,s,1] = transitions[i,s,0] + (np.random.rand() * diff)
-
-    for i in range(all_population):
-        for a in range(n_actions):
-            # ensure starting in good state is always good
-            if transitions[i,1,a] < transitions[i,0,a]:
-                diff = 1 - transitions[i,0,a]
-                transitions[i,1,a] = transitions[i,0,a] + (np.random.rand() * diff)
-
-    full_transitions = np.zeros((all_population, n_states, n_actions, n_states))
-    full_transitions[:,:,:,1] = transitions
-    full_transitions[:,:,:,0] = 1 - transitions
-
-    # return transitions
-    return full_transitions
-
-
-def random_valid_transition_round_down(all_population, n_states, n_actions):
-    """ set initial transition probabilities
-    returns array (N, S, A) that shows probability of transitioning to a **good** state
-
-    enforce "valid" transitions: acting is always good, and starting in good state is always good """
-
-    assert n_actions == 2
-
-    transitions = np.random.random((all_population, n_states, n_actions))
-
-    for i in range(all_population):
-        for s in range(n_states):
-            # ensure acting is always good
-            if transitions[i,s,1] < transitions[i,s,0]:
-                transitions[i,s,0] = transitions[i,s,1] * np.random.rand()
-
-    for i in range(all_population):
-        for a in range(n_actions):
-            # ensure starting in good state is always good
-            if transitions[i,1,a] < transitions[i,0,a]:
-                transitions[i,0,a] = transitions[i,1,a] * np.random.rand()
-
-    full_transitions = np.zeros((all_population, n_states, n_actions, n_states))
-    full_transitions[:,:,:,1] = transitions
-    full_transitions[:,:,:,0] = 1 - transitions
-
-    return full_transitions
-
-
-def synthetic_transition_small_window(all_population, n_states, n_actions, low, high):
-    """ set initial transition probabilities
-    returns array (N, S, A) that shows probability of transitioning to a **good** state
-
-    enforce "valid" transitions: acting is always good, and starting in good state is always good """
-
-    assert n_actions == 2
-    assert low < high
-    assert 0 < low < 1
-    assert 0 < high < 1
-
-    transitions = np.random.random((all_population, n_states, n_actions))
-
-    for i in range(all_population):
-        for s in range(n_states):
-            # ensure acting is always good
-            if transitions[i,s,1] < transitions[i,s,0]:
-                transitions[i,s,0] = transitions[i,s,1] * np.random.rand()
-
-    for i in range(all_population):
-        for a in range(n_actions):
-            # ensure starting in good state is always good
-            if transitions[i,1,a] < transitions[i,0,a]:
-                transitions[i,0,a] = transitions[i,1,a] * np.random.rand()
-
-    # scale down to a small window .4 to .6
-    max_val = np.max(transitions)
-    min_val = np.min(transitions)
-
-    transitions = transitions - min_val
-    transitions = transitions * (high - low) * (max_val - min_val) + low
-
-    full_transitions = np.zeros((all_population, n_states, n_actions, n_states))
-    full_transitions[:,:,:,1] = transitions
-    full_transitions[:,:,:,0] = 1 - transitions
-
-    return full_transitions
-
 def create_random_transitions(num_transitions,max_prob,min_transition_prob=0):
     """Create a matrix with a set of random transitions for N agents
     
     Arguments:
         num_transitions: How many sets of random transition matrices to creaet
-        max_prob: Maximum value of T_{0,0,1}
+        max_prob: Maximum value of P(0,0,1)
     
     Returns: Transition matrix, numpy array of size (num_transitions,2,2,2)"""
     
@@ -415,45 +274,11 @@ def create_random_transitions(num_transitions,max_prob,min_transition_prob=0):
                 transition_list[i,j,k,0] = 1-transition_list[i,j,k,1]
     return transition_list
 
-
-
-'''
-Testing the functionality of the simulator
-'''
-if __name__ == '__main__':
-    all_population  = 10000
-    all_features    = np.arange(all_population)
-    all_transitions = random_transition(all_population)
-    cohort_size     = 200
-    episode_len     = 100
-    budget          = 20
-    number_states   = 2
-
-    simulator = RMABSimulator(all_population, all_features, all_transitions, cohort_size, episode_len, budget)
-
-    for count in range(10):
-        simulator.reset()
-        features = simulator.get_features()
-
-        total_reward = 0
-
-        for t in range(episode_len):
-            action = np.zeros(cohort_size)
-            selection_idx = np.random.choice(a=cohort_size, size=budget, replace=False)
-            action[selection_idx] = 1
-            action = action.astype(int)
-
-            states, reward, done, _ = simulator.step(action)
-            total_reward += reward
-
-        print('total reward: {}'.format(total_reward))
-
-
 def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_epoch_function=None,lamb=0,get_memory=False,should_train=False,test_T=0):
     """Wrapper to run policies without needing to go through boilerplate code
     
     Arguments:
-        env: Simualtor environment
+        env: Simulator environment
         n_episodes: How many episodes to run for each epoch
             T = n_episodes * episode_len
         n_epochs: Number of different epochs/cohorts to run
@@ -462,11 +287,12 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
             produces action as a result
         seed: Random seed for run
         lamb: Float, tradeoff between matching, activity
+        should_train: Should we train the policy; if so, run epochs to train first
     
     Returns: Two things
-        matching reward - Numpy array of Epochs x T, with rewards for each combo
-        activity rate - Average rate of engagement across all volunteers
-        We aim to maximize matching reward + lamb*n_arms*activity_rate"""
+        matching reward - Numpy array of Epochs x T, with rewards for each combo (this is R_{glob})
+        activity rate - Average rate of engagement across all volunteers (this is R_{i}(s_{i},a_{i}))
+    """
 
     N         = env.cohort_size*env.volunteers_per_arm
     n_states  = env.number_states
@@ -570,6 +396,18 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
     return all_rewards
 
 def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
+    """Create the specific transition probabilities for a given probability distribution, seed
+    
+    Arguments:  
+        prob_distro: String, are we generating 'uniform', 'food_rescue', etc. 
+        seed: Integer, what random seed
+        max_transition_prob: q, dictates the size of transition probabilities
+        
+    Returns: Transition probabiliteis (numpy array of size Nx2x2x2) 
+        and probs_by_partition (For food rescue, the probabilities
+            for each volunteer), list of floats
+    """
+
     np.random.seed(seed)
     probs_by_partition = []
     if prob_distro == "uniform":
@@ -596,7 +434,23 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
     
     return all_transitions, probs_by_partition
 
-def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition):
+def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,volunteers_per_arm):
+    """Create the m_{i} or Y_{i} values for a given reward function
+
+    Arguments:  
+        reward_type: String, are we using 
+            a) set_cover
+            b) probability
+            c) linear
+            d) max
+        reward_parameters: Dictionary with arm_set_low, arm_set_high, and universize_size
+            This dictates the size of m_{i}, Y_{i}
+        N: number of arms total
+        probs_by_partition: For food rescue, the list of probabilities for volunteers in each 
+            partition/arm
+    
+    Returns: List of floats/sets, either m_{i} or Y_{i}(s_{i})"""
+
     if reward_type == "set_cover":
         if prob_distro == "fixed":
             match_probabilities = []
@@ -617,12 +471,20 @@ def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,
                     temp_set.add(np.random.randint(0,reward_parameters['universe_size']))
                 match_probabilities.append(temp_set)
     elif prob_distro == "food_rescue" or prob_distro == "food_rescue_top":
-        match_probabilities = [np.random.choice(probs_by_partition[i//parameters['volunteers_per_arm']]) for i in range(N)] 
+        match_probabilities = [np.random.choice(probs_by_partition[i//volunteers_per_arm]) for i in range(N)] 
     else:
         match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
     return match_probabilities
 
 def create_environment(parameters,max_transition_prob=0.25):
+    """Create an RMAB Simulator environment based on parameters
+    
+    Arguments:
+        parameters: Dictionary, with parameters for the RMAB simulator
+        max_transition_prob: Float, q, parameter for creating transitions
+    
+    Returns: Simulator, RMABSimulator object"""
+
     seed = parameters['seed']
     prob_distro = parameters['prob_distro']
     volunteers_per_arm = parameters['volunteers_per_arm']
@@ -646,7 +508,8 @@ def create_environment(parameters,max_transition_prob=0.25):
     all_features = np.arange(all_population_size)
     N = all_population_size*volunteers_per_arm
 
-    match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition)
+    match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,
+                                        parameters['volunteers_per_arm'])
 
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
                 n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=2, reward_style='custom',match_probability_list=match_probabilities)
@@ -669,6 +532,21 @@ def create_environment(parameters,max_transition_prob=0.25):
     return simulator 
 
 def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_function=None,avg_reward=0,mcts_test_iterations=400,mcts_depth=2,num_samples=100,shapley_iterations=1000,test_length=20,max_transition_prob=0.25):
+    """Run multiple seeds of trials for a given policy
+    
+    Arguments:
+        seed_list: List of integers, which seeds to run for
+        policy: Function which maps (RMABSimulator,state vector,budget,lamb,memory,per_epoch_results) to actions and memory
+            See baseline_policies.py for examples
+        parameters: Dictionary with keys for each parameter
+        should_train: Boolean; if we're training, then we run the policy for the training period
+            Otherwise, we just skip these + run only fo the testing period
+    
+    Returns: 3 things, the scores dictionary with reward, etc. 
+        memories: List of memories (things that the policy might store between timesteps)
+        simulator: RMABSimulator object
+    """
+    
     memories = []
     scores = {
         'reward': [],

@@ -132,87 +132,6 @@ class Memoizer:
         p_key = self.to_key(input1, input2)
         self.solved_p_vals[p_key] = wi
 
-def get_valid_lcb_ucb(arm_p_lcb, arm_p_ucb):
-    n_states, n_actions = arm_p_lcb.shape
-
-    # enforce validity constraints
-    assert n_actions == 2  # these checks only valid for two-action
-    for s in range(n_states):
-        # always better to act
-        if arm_p_ucb[s, 0] > arm_p_ucb[s, 1]:  # move passive UCB down
-            arm_p_ucb[s, 0] = arm_p_ucb[s, 1]
-        if arm_p_lcb[s, 1] < arm_p_lcb[s, 1]:  # move active LCB up
-            arm_p_lcb[s, 1] = arm_p_lcb[s, 1]
-
-    assert n_states == 2  # these checks only valid for two-state
-    for a in range(n_actions):
-        # always better to start in good state
-        if arm_p_ucb[0, a] > arm_p_ucb[1, a]:  # move bad-state UCB down
-            arm_p_ucb[0, a] = arm_p_ucb[1, a]
-        if arm_p_lcb[1, a] < arm_p_lcb[0, a]:  # move good-state LCB up
-            arm_p_lcb[1, a] = arm_p_lcb[0, a]
-
-    # these above corrections may lead to LCB being higher than UCBs... so make the UCB the optimistic option
-    if arm_p_ucb[0, 0] < arm_p_lcb[0, 0]:
-        print(f'ISSUE 00!! lcb {arm_p_lcb[0, 0]:.4f} ucb {arm_p_ucb[0, 0]:.4f}')
-        arm_p_ucb[0, 0] = arm_p_lcb[0, 0] # p_ucb[i, 0, 0]
-    if arm_p_ucb[0, 1] < arm_p_lcb[0, 1]:
-        print(f'ISSUE 01!! lcb {arm_p_lcb[0, 1]:.4f} ucb {arm_p_ucb[0, 1]:.4f}')
-        arm_p_ucb[0, 1] = arm_p_lcb[0, 1] # p_ucb[i, 0, 1]
-    if arm_p_ucb[1, 0] < arm_p_lcb[1, 0]:
-        print(f'ISSUE 10!! lcb {arm_p_lcb[1, 0]:.4f} ucb {arm_p_ucb[1, 0]:.4f}')
-        arm_p_ucb[1, 0] = arm_p_lcb[1, 0] # p_ucb[i, 1, 0]
-    if arm_p_ucb[1, 1] < arm_p_lcb[1, 1]:
-        print(f'ISSUE 11!! lcb {arm_p_lcb[1, 1]:.4f} ucb {arm_p_ucb[1, 1]:.4f}')
-        arm_p_ucb[1, 1] = arm_p_lcb[1, 1] # p_ucb[i, 1, 1]
-
-    return arm_p_lcb, arm_p_ucb
-
-
-def get_ucb_conf(cum_prob, n_pulls, t, alpha, episode_count, delta=1e-4,norm_confidence=False):
-    """ calculate transition probability estimates """
-    n_arms, n_states, n_actions = n_pulls.shape
-
-    with np.errstate(divide='ignore'):
-        n_pulls_at_least_1 = np.copy(n_pulls)
-        n_pulls_at_least_1[n_pulls == 0] = 1
-        est_p               = (cum_prob) / (n_pulls_at_least_1)
-        est_p[n_pulls == 0] = 1 / n_states  # where division by 0
-
-        if norm_confidence:
-            p_hat = cum_prob / n_pulls_at_least_1
-            z = st.norm.ppf(1 - delta / 2)
-            denominator = 1 + z**2 / n_pulls_at_least_1
-            center = (p_hat + z**2 / (2 * n_pulls_at_least_1)) / denominator
-            conf_p = z * (p_hat * (1 - p_hat) / n_pulls_at_least_1 + z**2 / (4 * n_pulls_at_least_1**2))**0.5 / denominator
-
-            # alpha = 1+cum_prob 
-            # b = 1+n_pulls_at_least_1-cum_prob 
-
-            # lower_bound = beta.ppf(delta/2,alpha,b)
-            # upper_bound = beta.ppf(1-delta/2,alpha,b)
-
-            # lower_bound = np.clip(lower_bound,0,1)
-            # upper_bound = np.clip(upper_bound,0,1)
-
-            # est_p = (alpha-1)/(alpha+b-2)
-            # est_p[n_pulls == 0] = 1/n_states 
-            # conf_p = np.maximum(np.abs(est_p-lower_bound),np.abs(upper_bound-est_p))            
-
-            # z_score = norm.ppf(1-delta/2)
-            # conf_p = z_score*np.sqrt((est_p+0.5)*(n_pulls_at_least_1-n_pulls_at_least_1*est_p+0.5)/((n_pulls_at_least_1*n_pulls_at_least_1)*(n_pulls_at_least_1+1)))
-        else: 
-            conf_p = np.sqrt( 2 * n_states * np.log( 2 * n_states * n_actions * n_arms * ((episode_count+1)**4 / delta) ) / n_pulls_at_least_1 )
-        
-        # conf_p[n_pulls < 5] = 0.5
-        conf_p[n_pulls == 0] = 1
-        conf_p[conf_p > 1]   = 1  # keep within valid range 
-
-    # if VERBOSE: print('conf', np.round(conf_p.flatten(), 2))
-    # if VERBOSE: print('est p', np.round(est_p.flatten(), 2))
-
-    return est_p, conf_p
-
 def is_pareto_optimal(point, data):
     """Determine if a data point is pareto optimal
     
@@ -425,6 +344,21 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
         raise Exception("Reward type {} not found".format(custom_reward_type))  
 
 def partition_volunteers(probs_by_num,num_by_section):
+    """Given a list of volunteer probabilities, partition this
+        for each arm 
+        E.g., partition_volunteers([[0.1,0.2],[0.3,0.4],[0.5]],[[0,1],[2]])
+            Returns: [[0.1,0.2,0.3,0.4],[0.5]]
+
+    Arguments:
+        probs_by_num: List of lists of floats, corresponding to match probabilities
+            for each volunteer who completed X trips
+        num_by_section: List of list of integers; which trip numbers correspond to  
+            which partitions
+    
+    Returns: List of list of floats, match probabilities per arm
+        The values m_{i} are chosen from this
+    """
+
     total = sum([len(probs_by_num[i]) for i in probs_by_num])
     num_per_section = total//num_by_section
 
@@ -444,6 +378,14 @@ def partition_volunteers(probs_by_num,num_by_section):
     return nums_by_partition
 
 def restrict_resources():
+    """Set the system to only use a fraction of the memory/CPU/GPU available
+    
+    Arguments: None
+    
+    Returns: None
+    
+    Side Effects: Makes sure that a) Only 50% of GPU is used, b) 1 Thread is used, and c) 30 GB of Memory"""
+
     torch.cuda.set_per_process_memory_fraction(0.5)
     torch.set_num_threads(1)
     resource.setrlimit(resource.RLIMIT_AS, (30 * 1024 * 1024 * 1024, -1))

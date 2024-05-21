@@ -2,7 +2,8 @@ import numpy as np
 import random 
 
 from rmab.utils import Memoizer
-from rmab.whittle_policies import whittle_index, shapley_index_custom, shapley_whittle_custom_policy, random_policy, whittle_policy
+from rmab.whittle_policies import whittle_index, shapley_index_custom, shapley_whittle_custom_policy, whittle_policy
+from rmab.baseline_policies import random_policy
 from rmab.utils import custom_reward, binary_to_decimal, list_to_binary, one_hot
 from rmab.compute_whittle import get_multi_Q
 

@@ -12,6 +12,92 @@ import rmab.secret as secret
 from rmab.utils import partition_volunteers
 
 
+def get_food_rescue(all_population_size):
+    """Get the transitions for Food Rescue
+    
+    Arguments:
+        all_population_size: Integer, Number of total arms 
+            This is larger than N; we select the N arms out of this population size
+    
+    Returns: Two Things
+        Numpy array of size Nx2x2x2
+        probs_by_partition: Probabilities for matching for each volunteer
+            List of lists of size N"""
+
+    probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
+    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
+    probs_by_num = {}
+    for i in rescues_by_user:
+        if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
+            if len(rescues_by_user[i]) not in probs_by_num:
+                probs_by_num[len(rescues_by_user[i])] = []
+            probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
+
+    partitions = partition_volunteers(probs_by_num,all_population_size)
+    probs_by_partition = []
+    all_transitions = get_all_transitions_partition(all_population_size,partitions)
+
+    for i in range(len(partitions)):
+        temp_probs = []
+        for j in partitions[i]:
+            temp_probs += (probs_by_num[j])
+        probs_by_partition.append(temp_probs)
+
+    for i,partition in enumerate(partitions):
+        current_transitions = np.array(all_transitions[i])
+        partition_scale = np.array([len(probs_by_num[j]) for j in partition])
+        partition_scale = partition_scale/np.sum(partition_scale)
+        prod = current_transitions*partition_scale[:,np.newaxis,np.newaxis,np.newaxis]
+        new_transition = np.sum(prod,axis=0)
+        all_transitions[i] = new_transition
+    all_transitions = np.array(all_transitions)
+
+    return all_transitions, probs_by_partition
+
+def get_food_rescue_top(all_population_size):
+    """Get the transitions for Food Rescue
+        For volunteers who completed more than 100 trips
+    
+    Arguments:
+        all_population_size: Integer, Number of total arms 
+            This is larger than N; we select the N arms out of this population size
+    
+    Returns: Two Things
+        Numpy array of size Nx2x2x2
+        probs_by_partition: Probabilities for matching for each volunteer
+            List of lists of size N"""
+
+    probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
+    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
+    probs_by_num = {}
+    for i in rescues_by_user:
+        if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 100:
+            if len(rescues_by_user[i]) not in probs_by_num:
+                probs_by_num[len(rescues_by_user[i])] = []
+            probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
+
+    partitions = partition_volunteers(probs_by_num,all_population_size)
+    probs_by_partition = []
+
+    for i in range(len(partitions)):
+        temp_probs = []
+        for j in partitions[i]:
+            temp_probs += (probs_by_num[j])
+        probs_by_partition.append(temp_probs)
+
+    all_transitions = get_all_transitions_partition(all_population_size,partitions)
+
+    for i,partition in enumerate(partitions):
+        current_transitions = np.array(all_transitions[i])
+        partition_scale = np.array([len(probs_by_num[j]) for j in partition])
+        partition_scale = partition_scale/np.sum(partition_scale)
+        prod = current_transitions*partition_scale[:,np.newaxis,np.newaxis,np.newaxis]
+        new_transition = np.sum(prod,axis=0)
+        all_transitions[i] = new_transition
+    all_transitions = np.array(all_transitions)
+
+    return all_transitions, probs_by_partition
+
 def get_data_all_users(cursor):
     """Retrieve the list of rescue times by user, stored in a dictionary
     
@@ -744,66 +830,3 @@ def get_match_probabilities(T,volunteers_per_group,groups,rf_classifier,rescues_
         features.append(current_feats)
 
     return np.array(match_probabilities), np.array(features) 
-
-def get_food_rescue(all_population_size):
-    probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
-    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
-    probs_by_num = {}
-    for i in rescues_by_user:
-        if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
-            if len(rescues_by_user[i]) not in probs_by_num:
-                probs_by_num[len(rescues_by_user[i])] = []
-            probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
-
-    partitions = partition_volunteers(probs_by_num,all_population_size)
-    probs_by_partition = []
-    all_transitions = get_all_transitions_partition(all_population_size,partitions)
-
-    for i in range(len(partitions)):
-        temp_probs = []
-        for j in partitions[i]:
-            temp_probs += (probs_by_num[j])
-        probs_by_partition.append(temp_probs)
-
-    for i,partition in enumerate(partitions):
-        current_transitions = np.array(all_transitions[i])
-        partition_scale = np.array([len(probs_by_num[j]) for j in partition])
-        partition_scale = partition_scale/np.sum(partition_scale)
-        prod = current_transitions*partition_scale[:,np.newaxis,np.newaxis,np.newaxis]
-        new_transition = np.sum(prod,axis=0)
-        all_transitions[i] = new_transition
-    all_transitions = np.array(all_transitions)
-
-    return all_transitions, probs_by_partition
-
-def get_food_rescue_top(all_population_size):
-    probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
-    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
-    probs_by_num = {}
-    for i in rescues_by_user:
-        if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 100:
-            if len(rescues_by_user[i]) not in probs_by_num:
-                probs_by_num[len(rescues_by_user[i])] = []
-            probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
-
-    partitions = partition_volunteers(probs_by_num,all_population_size)
-    probs_by_partition = []
-
-    for i in range(len(partitions)):
-        temp_probs = []
-        for j in partitions[i]:
-            temp_probs += (probs_by_num[j])
-        probs_by_partition.append(temp_probs)
-
-    all_transitions = get_all_transitions_partition(all_population_size,partitions)
-
-    for i,partition in enumerate(partitions):
-        current_transitions = np.array(all_transitions[i])
-        partition_scale = np.array([len(probs_by_num[j]) for j in partition])
-        partition_scale = partition_scale/np.sum(partition_scale)
-        prod = current_transitions*partition_scale[:,np.newaxis,np.newaxis,np.newaxis]
-        new_transition = np.sum(prod,axis=0)
-        all_transitions[i] = new_transition
-    all_transitions = np.array(all_transitions)
-
-    return all_transitions, probs_by_partition

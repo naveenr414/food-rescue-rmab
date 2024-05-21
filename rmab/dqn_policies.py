@@ -2,7 +2,7 @@ from rmab.mcts_policies import get_reward, get_reward_max, get_reward_custom
 import numpy as np
 import random 
 
-from rmab.uc_whittle import Memoizer
+from rmab.utils import Memoizer
 from rmab.whittle_policies import whittle_index, shapley_index_custom, shapley_whittle_custom_policy
 from rmab.utils import custom_reward, binary_to_decimal, list_to_binary
 from rmab.compute_whittle import get_q_vals, arm_compute_whittle, arm_compute_whittle_multi_prob
