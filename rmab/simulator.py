@@ -622,7 +622,7 @@ def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,
         match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
     return match_probabilities
 
-def create_environment(parameters):
+def create_environment(parameters,max_transition_prob=0.25):
     seed = parameters['seed']
     prob_distro = parameters['prob_distro']
     volunteers_per_arm = parameters['volunteers_per_arm']
@@ -637,7 +637,7 @@ def create_environment(parameters):
     n_episodes = parameters['n_episodes']
     budget = parameters['budget']
 
-    all_transitions,probs_by_partition = create_transitions_from_prob(prob_distro,seed)
+    all_transitions,probs_by_partition = create_transitions_from_prob(prob_distro,seed,max_transition_prob=max_transition_prob)
     all_population_size = len(all_transitions)
 
     random.seed(seed)
@@ -668,7 +668,7 @@ def create_environment(parameters):
     
     return simulator 
 
-def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_function=None,avg_reward=0,mcts_test_iterations=400,mcts_depth=2,num_samples=100,shapley_iterations=1000,test_length=20):
+def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_function=None,avg_reward=0,mcts_test_iterations=400,mcts_depth=2,num_samples=100,shapley_iterations=1000,test_length=20,max_transition_prob=0.25):
     memories = []
     scores = {
         'reward': [],
@@ -678,7 +678,7 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
     }
 
     for seed in seed_list:
-        simulator = create_environment(parameters)
+        simulator = create_environment(parameters,max_transition_prob=max_transition_prob)
         simulator.avg_reward = avg_reward
         simulator.num_samples = num_samples
         simulator.mcts_test_iterations = mcts_test_iterations
