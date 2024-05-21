@@ -18,6 +18,10 @@ First, create all the folders needed to run experiments by running
 ```bash
 bash scripts/bash_scripts/main_scripts/create_folders.sh
 ```
+Then run 
+```bash
+pip install .
+```
 
 Experiments are run from the `scripts/notebooks` folder. For example, to run all experiments with the Linear reward function, from within the `scripts/notebooks` folder, run
 ```
