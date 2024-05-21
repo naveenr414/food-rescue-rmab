@@ -21,7 +21,7 @@ do
                 for prob_distro in uniform one_time 
                 do 
                     tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type max --arm_set_low 0 --arm_set_high ${arm_set_high} --prob_distro ${prob_distro} --out_folder reward_variation/max_reward" ENTER
-                    tmux send-keys -t match_${session} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type max --arm_set_low 0 --arm_set_high ${arm_set_high} --prob_distro ${prob_distro} --out_folder baselines/all" ENTER
+                    tmux send-keys -t match_${session} "conda activate food; python baselines.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type max --arm_set_low 0 --arm_set_high ${arm_set_high} --prob_distro ${prob_distro} --out_folder baselines/all" ENTER
                 done 
             done 
         done 

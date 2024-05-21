@@ -29,13 +29,13 @@ do
             budget=$(printf "%.0f" $budget)
             arm_set_high=1 
             tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type max --arm_set_low 0 --arm_set_high ${arm_set_high} --out_folder reward_variation/max_reward" ENTER
-            tmux send-keys -t match_${session} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type max --arm_set_low 0 --arm_set_high ${arm_set_high} --out_folder baselines/all" ENTER
+            tmux send-keys -t match_${session} "conda activate food; python baselines.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type max --arm_set_low 0 --arm_set_high ${arm_set_high} --out_folder baselines/all" ENTER
         done 
 
         for lamb in 0 0.25 0.5 0.75 1
         do 
             tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms 10 --lamb ${lamb} --budget 5 --reward_type max --arm_set_low 0 --arm_set_high 1 --out_folder reward_variation/max_reward" ENTER
-            tmux send-keys -t match_${session} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 1 --n_arms 10 --lamb ${lamb} --budget 5 --reward_type max --arm_set_low 0 --arm_set_high 1 --out_folder baselines/all" ENTER
+            tmux send-keys -t match_${session} "conda activate food; python baselines.py --seed ${seed} --volunteers_per_arm 1 --n_arms 10 --lamb ${lamb} --budget 5 --reward_type max --arm_set_low 0 --arm_set_high 1 --out_folder baselines/all" ENTER
         done 
     done 
 done 

@@ -21,7 +21,7 @@ do
                 do 
                     if awk -v low="$arm_set_low" -v high="$arm_set_high" 'BEGIN { exit !(high > low) }'; then
                         tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type probability --arm_set_low ${arm_set_low} --arm_set_high ${arm_set_high} --out_folder reward_variation/prob_reward" ENTER
-                        tmux send-keys -t match_${session} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type probability --arm_set_low ${arm_set_low} --arm_set_high ${arm_set_high} --out_folder baselines/all" ENTER
+                        tmux send-keys -t match_${session} "conda activate food; python baselines.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type probability --arm_set_low ${arm_set_low} --arm_set_high ${arm_set_high} --out_folder baselines/all" ENTER
                     fi 
                 done 
             done 

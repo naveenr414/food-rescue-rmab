@@ -16,7 +16,7 @@ do
             budget=$(echo "${n_arms}*${budget_frac}" | bc)
             budget=$(printf "%.0f" $budget)
             tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type linear --arm_set_low 0 --arm_set_high 1 --out_folder reward_variation/linear_reward" ENTER
-            tmux send-keys -t match_${session} "conda activate food; python pure_rl.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type linear --arm_set_low 0 --arm_set_high 1 --out_folder baselines/all" ENTER
+            tmux send-keys -t match_${session} "conda activate food; python baselines.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type linear --arm_set_low 0 --arm_set_high 1 --out_folder baselines/all" ENTER
         done 
     done 
 done 
