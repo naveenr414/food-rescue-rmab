@@ -239,6 +239,17 @@ results['{}_time'.format(name)] =  rewards['time']
 print(np.mean(rewards['reward']))
 
 # +
+policy = random_policy
+name = "random"
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,test_length=episode_len*(n_episodes%50))
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+print(np.mean(rewards['reward']))
+
+# +
 policy = whittle_policy
 name = "linear_whittle"
 
