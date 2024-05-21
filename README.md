@@ -1,31 +1,22 @@
-# Restless Bandits with Matching
-This code evaluates and tests restless bandits in a matching context, including both the activity of arms, and their match success. 
+# Restless Bandits with Global Rewards
+This code evaluates and tests restless bandits with a global reward. We develop policies which extend Whittle indices to account for global non-separable rewards. 
 
 The code contains experiments using a synthetic dataset, and real-world data using a Food Rescue dataset is hidden due to confidentiality.
 
 ## Directory Structure
-The `rmab` folder contains most of the code for core algorithms and functions. Whittle-index related code is in `compute_whittle.py`, `uc_whittle.py`, and `ucw_value.py`. Food-rescue related code is in `fr_dynamics.py` and `database.py.` Bandit simulator code is in `simulator.py`, while matching algorithms are in `uc_whittle.py` (TODO: Move this somewhere else). 
+The `rmab` folder contains most of the code for core algorithms and functions. 
+Whittle-index policies are in `whittle_policies.py`, baselines are in `baseline_policies.py`, MCTS in `mcts_policies.py` and RL policies in `dqn_policies.py`. Bandit simulator code is in `simulator.py`, while food rescue code is in `fr_dynamics.py`. 
 
-The scripts folder uses these functions to run experiments. Each experiment is captured by an interactive Jupyter notebook, which runs the experiment for one parameter combination, and a Python file, which allows for many different run combinations. Bash files run these python files across many configurations, and the results are stored in the results folder. 
+The scripts folder uses these functions to run experiments. 
+Each experiment is captured by an interactive Jupyter notebook, which is in the `scripts/notebooks` folder, and runs the experiment for one parameter combination. 
+Each experiment is also paired with a Python file, which is a converted version of the Jupyter script.
+The `scripts/bash_scripts` folder runs different main and ablation scripts by calling the `scripts/notebooks` folder. 
+Results are written to the `result` folder. 
 
 ## Running Experiments
-Experiments are run from the scripts folder. For example, to compare activity for various bandit algorithms, from within the scripts folder, run
+Experiments are run from the `scripts/notebooks` folder. For example, to run all experiments with the Linear reward function, from within the `scripts/notebooks` folder, run
 ```
-bash run_better_bandit.sh
-```
-To compare UC Whittle vs. Normal-distribution performance for an indvidual configuration, run 
-```
-python better_bandit.py --seed 42 --dataset synthetic --n_arms 8 --save_name normal --use_date
-```
-Doing so will compare bandit algorithms for 8 arms, saving it as `results/better_bandit/normal_42_{date}.json` 
-
-To do this for matching algorithms and compare match rate, run 
-```
-bash run_matching_bandit.sh
-```
-Similarly, to compute pareto frontiers, run
-```
-bash run_combined_bandit.sh
+bash ../main_scripts/run_linear.sh
 ```
 The `Plotting.ipynb` notebook uses the information from the results folder to create plots. 
 
@@ -34,4 +25,30 @@ All requirements are contained in the ``environment.yaml'' file.
 To creaet an anaconda environment from this, run
 ```
 conda env create --file environment.yaml
+```
+
+## Running custom policies
+To run custom policies, define a function that takes in an environment and a state, then returns an action
+For example, to define the random policy: 
+```
+def random_policy(env,state,budget,lamb,memory, per_epoch_results):
+    """Random policy that randomly notifies budget arms
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+
+
+    N = len(state)
+    selected_idx = random.sample(list(range(N)), budget)
+    action = np.zeros(N, dtype=np.int8)
+    action[selected_idx] = 1
+
+    return action, None
 ```
