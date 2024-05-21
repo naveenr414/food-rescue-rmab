@@ -1,11 +1,11 @@
 import gym
 import numpy as np
-import gymnasium.spaces as spaces
-from rmab.fr_dynamics import get_db_data, train_rf,  get_match_probabilities, get_food_rescue, get_food_rescue_top
+from rmab.fr_dynamics import  get_food_rescue, get_food_rescue_top
 from rmab.utils import custom_reward
 from rmab.baseline_policies import random_policy
 import random
 import torch 
+from itertools import combinations
 import time 
 
 class RMABSimulator(gym.Env):
@@ -528,6 +528,7 @@ def create_environment(parameters,max_transition_prob=0.25):
     'arm_set_low': parameters['arm_set_low'], 
     'arm_set_high': parameters['arm_set_high']} 
     simulator.time_limit = parameters['time_limit']
+    simulator.ratio = 0
     
     return simulator 
 
@@ -564,6 +565,27 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
         simulator.shapley_iterations = shapley_iterations  
 
         policy_results = run_heterogenous_policy(simulator, parameters['n_episodes'], parameters['n_epochs'], parameters['discount'],policy,seed,lamb=parameters['lamb'],should_train=should_train,test_T=test_length,get_memory=should_train,per_epoch_function=per_epoch_function)
+        if parameters['reward_type'] == "set_cover" and parameters['n_arms'] <= 10:
+            match_probs = simulator.match_probability_list[simulator.agent_idx]
+
+            best_overall = 0.01
+
+            avg_combo = []
+
+            match_prob_lens = sum(sorted([len(i) for i in match_probs])[-parameters['budget']:])
+
+            for i in combinations(match_probs,parameters['budget']):
+                s = set()
+                for j in i:
+                    s = s.union(j)
+                sum_len = sum([len(j) for j in i])
+
+                if sum_len == match_prob_lens:
+                    avg_combo.append(len(s))
+                if len(s) > best_overall:
+                    best_overall = len(s) 
+            ratio = np.mean(avg_combo)/best_overall 
+            simulator.ratio = ratio 
 
         if should_train:
             memory = policy_results[2]
