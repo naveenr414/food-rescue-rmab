@@ -1,10 +1,3 @@
-"""
-standard Whittle index computation based on binary search
-
-POSSIBLE OPTIMIZATIONS TO HELP SPEED
-- keep track of top k WIs so far. then in future during binary search, if we go below that WI just quit immediately
-"""
-
 import numpy as np
 from itertools import product, combinations
 from rmab.utils import binary_to_decimal, list_to_binary, custom_reward

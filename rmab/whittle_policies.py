@@ -1,22 +1,12 @@
 """ Index-Based Algorithms for matching, activity """
 
 import numpy as np
-import heapq
 
-from rmab.uc_whittle import Memoizer
-from rmab.compute_whittle import arm_compute_whittle, arm_value_iteration_exponential, fast_arm_compute_whittle, get_q_vals, fast_arm_compute_whittle_multi_prob
+from rmab.utils import Memoizer
+from rmab.compute_whittle import arm_value_iteration_exponential, fast_arm_compute_whittle, fast_arm_compute_whittle_multi_prob
 from rmab.utils import binary_to_decimal, custom_reward, one_hot, one_hot_fixed
-from itertools import combinations
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import itertools 
-from openrl.modules.common import PPONet as Net
-from openrl.runners.common import PPOAgent as Agent
-from scipy.stats import binom
 from copy import deepcopy
-from mcts import mcts
 import random 
 import time
 import scipy
@@ -26,12 +16,12 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
     
     Arguments:
         env: Simualtor RMAB environment
-        state: Numpy array of 0-1 for each volunteer
-        budget: Max arms to pick 
-        lamb: Float, balancing matching and activity
+        state: Numpy array of 0-1 for each volunteer, s_{i}
+        budget: Max arms to pick, K
+        lamb: Float, balancing matching and activity, \alpha 
         memoizer: Object that stores previous Whittle index computations
     
-    Returns: List of Whittle indices for each arm"""
+    Returns: List of Whittle indices for each arm, w_{i}(s_{i})"""
     N = len(state) 
 
     if reward_function == "activity":
@@ -63,9 +53,7 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
             if match_prob_now is not None:
                 state_WI[i] = fast_arm_compute_whittle_multi_prob(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],match_prob_now=match_prob_now[i],num_arms=len(state))
             else:
-                # TODO: Remove this
                 state_WI[i] = fast_arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],num_arms=len(state))
-                # state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],num_arms=len(state))
             if reward_function == "activity":
                 memoizer.add_set(arm_transitions, state[i], state_WI[i])
             else:
@@ -73,48 +61,38 @@ def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shap
                     memoizer.add_set(arm_transitions+round(match_probability_list[i],4)+(round(match_prob_now[i],4) + 0.0001)*1000, state[i], state_WI[i])
                 else:
                     memoizer.add_set(arm_transitions+round(match_probability_list[i],4), state[i], state_WI[i])
-    
-            
-
     return state_WI
 
 def shapley_index_custom(env,state,memoizer_shapley = {}):
     """Compute the Shapley index for matching; how much
         does match probability increase when using some particular arm
+        u_{i}(s_{i})
         
     Arguments:
         env: RMAB Simulator environment
-        state: Numpy array of 0-1 states for each volunteer
+        state: Numpy array of 0-1 states for each volunteer, s_{i}
         memoizer_shapley: Dictionary, to store previously computed Shapley indices
         
     Returns: Two things, shapley index, and updated dictionary"""
 
     shapley_indices = [0 for i in range(len(state))]
     state_str = "".join([str(i) for i in state])
-
     if state_str in memoizer_shapley:
         return memoizer_shapley[state_str], memoizer_shapley
-
     state_1 = [i for i in range(len(state)) if state[i] != 0]
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
     corresponding_probabilities = match_probabilities[state_1]
     num_random_combos = env.shapley_iterations 
 
     combinations = np.zeros((num_random_combos, len(corresponding_probabilities)), dtype=int)
-
     budget = env.budget 
-
-    # Fix for when the number of combinations is small (with respect to the budget)
-    # In that scenario, we can essentially just manually compute
     if len(corresponding_probabilities) <= env.budget-1:
         if len(corresponding_probabilities) == 1:
             return match_probabilities * state, memoizer_shapley
         else: 
             budget = 2
-
     budget_probs = np.array([scipy.special.comb(len(corresponding_probabilities),k) for k in range(0,budget)])
     budget_probs /= np.sum(budget_probs)
-
 
     for i in range(num_random_combos):
         k = random.choices(list(range(len(budget_probs))), weights=budget_probs,k=1)[0]
@@ -122,12 +100,10 @@ def shapley_index_custom(env,state,memoizer_shapley = {}):
         combinations[i, ones_indices] = 1
 
     state = [int(i) for i in state]
-
     scores = []
     for i in range(num_random_combos):
         combo = combinations[i]
         scores.append(custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters))
-
     scores = np.array(scores)
 
     num_by_shapley_index = np.zeros(len(state_1))
@@ -139,9 +115,7 @@ def shapley_index_custom(env,state,memoizer_shapley = {}):
                 shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
                 num_by_shapley_index[i] += 1
                 action[i] = 0
-
     shapley_indices /= num_by_shapley_index
-
     memoizer_shapley[state_str] = shapley_indices
 
     return shapley_indices, memoizer_shapley
@@ -433,11 +407,12 @@ def shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_resu
     return action, (memory_whittle,match_probs) 
 
 
-def q_iteration_epoch(env,lamb,reward_function='combined',power=None):
+def q_iteration_epoch(env,lamb,reward_function='combined'):
     """Compute Q Values for all combinations of agents in a given environment
     
     Arguments:
         env: RMAB Simulator environment
+        lamb: \alpha, tradeoff between R_{i} and R_{glob}
         
     Returns: Q values, one for each combination of state + action"""
 
@@ -449,7 +424,7 @@ def q_iteration_epoch(env,lamb,reward_function='combined',power=None):
     budget = env.budget 
 
     Q_vals = arm_value_iteration_exponential(true_transitions,discount,budget,env.volunteers_per_arm,env.reward_type,env.reward_parameters,
-                    reward_function=reward_function,power=power,lamb=lamb,
+                    reward_function=reward_function,lamb=lamb,
                     match_probability_list=match_probability)
 
     return Q_vals 
@@ -526,6 +501,7 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
         lamb: Lambda, float, tradeoff between matching vs. activity
         memory: Any information passed from previous epochs; unused here
         per_epoch_results: The Q Values
+        debug: If we want to see the actual Q values, boolean
     
     Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
 
@@ -556,36 +532,6 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     return action, None
 
-
-def greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
-    """Greedy policy that selects the budget highest values
-        of state*match_probability + activity_score * lamb
-    
-    Arguments:
-        env: Simulator environment
-        state: Numpy array with 0-1 states for each agent
-        budget: Integer, max agents to select
-        lamb: Lambda, float, tradeoff between matching vs. activity
-        memory: Any information passed from previous epochs; unused here
-        per_epoch_results: Any information computed per epoch; unused here
-    
-    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
-
-    N = len(state)
-
-    score_by_agent = [0 for i in range(N)]
-    match_probabilities = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
-    for i in range(N):
-        activity_score = np.sum(state)
-        
-        matching_score = state[i]*match_probabilities[i]
-        score_by_agent[i] = matching_score + activity_score * lamb 
-
-    selected_idx = np.argsort(score_by_agent)[-budget:][::-1]
-    action = np.zeros(N, dtype=np.int8)
-    action[selected_idx] = 1
-
-    return action, None
 
 def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
     """Combination of the Whittle index + match probability
@@ -654,24 +600,3 @@ def shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_result
     action[sorted_WI[:budget]] = 1
 
     return action, (memory_whittle, memory_shapley)
-
-def random_policy(env,state,budget,lamb,memory, per_epoch_results):
-    """Random policy that randomly notifies budget arms
-    
-    Arguments:
-        env: Simulator environment
-        state: Numpy array with 0-1 states for each agent
-        budget: Integer, max agents to select
-        lamb: Lambda, float, tradeoff between matching vs. activity
-        memory: Any information passed from previous epochs; unused here
-        per_epoch_results: Any information computed per epoch; unused here
-    
-    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
-
-
-    N = len(state)
-    selected_idx = random.sample(list(range(N)), budget)
-    action = np.zeros(N, dtype=np.int8)
-    action[selected_idx] = 1
-
-    return action, None
