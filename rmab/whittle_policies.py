@@ -4,7 +4,7 @@ import numpy as np
 
 from rmab.utils import Memoizer
 from rmab.compute_whittle import arm_value_iteration_exponential, fast_arm_compute_whittle, fast_arm_compute_whittle_multi_prob
-from rmab.utils import binary_to_decimal, custom_reward, one_hot, one_hot_fixed
+from rmab.utils import binary_to_decimal, custom_reward, one_hot, one_hot_fixed, custom_reward_contextual, get_average_context
 
 from copy import deepcopy
 import random 
@@ -175,7 +175,7 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled):
     scores = []
     for i in range(num_random_combos):
         combo = combinations[i]
-        scores.append(custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters))
+        scores.append(custom_reward_contextual(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,env.context))
 
     scores = np.array(scores)
 
@@ -184,7 +184,7 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled):
         for i in range(len(state_1)):
             if combo[i] == 0:
                 action[i] = 1
-                shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
+                shapley_indices[i] += custom_reward_contextual(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.context) - scores[j]
                 num_by_shapley_index[i] += 1
                 action[i] = 0
         if time.time()-start > env.time_limit:
@@ -250,7 +250,8 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     if memory == None:
         memoizer = Memoizer('optimal')
-        match_probs = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
+        average_context = get_average_context(env.context_dim)
+        match_probs = [custom_reward_contextual(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,average_context) for i in range(len(state))]
         for i in range(2):
             s = [i for _ in range(len(state))]
             whittle_index(env,s,budget,lamb,memoizer,reward_function="combined",match_probs=match_probs)
@@ -300,10 +301,10 @@ def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
     for _ in range(budget):
         if len(pulled_arms) > 0:
             arms_0_1 = one_hot_fixed(pulled_arms[0],len(state),pulled_arms)
-            default_custom_reward = custom_reward(arms_0_1,arms_0_1,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)
+            default_custom_reward = custom_reward_contextual(arms_0_1,arms_0_1,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.context)
         else:
             default_custom_reward = 0
-        match_prob_now = [custom_reward(one_hot_fixed(i,len(state),pulled_arms),one_hot_fixed(i,len(state),pulled_arms),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)-default_custom_reward for i in range(len(state))]
+        match_prob_now = [custom_reward_contextual(one_hot_fixed(i,len(state),pulled_arms),one_hot_fixed(i,len(state),pulled_arms),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.context)-default_custom_reward for i in range(len(state))]
         match_prob_now = np.array(match_prob_now)
 
         state_WI = whittle_index(env,state,budget,lamb,memoizer,match_probs=match_probs,match_prob_now=match_prob_now)

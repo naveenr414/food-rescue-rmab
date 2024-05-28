@@ -4,7 +4,7 @@ import random
 from rmab.utils import Memoizer
 from rmab.whittle_policies import whittle_index, shapley_index_custom
 from rmab.baseline_policies import random_policy
-from rmab.utils import custom_reward, one_hot
+from rmab.utils import custom_reward, one_hot, custom_reward_contextual
 from rmab.compute_whittle import get_multi_Q
 
 import time
@@ -21,6 +21,10 @@ def get_reward_max(state,action,match_probs,lamb):
 
 def get_reward_custom(state,action,match_probs,lamb,reward_type,reward_parameters):
     return custom_reward(state,action,match_probs,reward_type,reward_parameters)*(1-lamb) + np.sum(state)/len(state)*lamb
+
+def get_reward_custom_contextual(state,action,match_probs,lamb,reward_type,reward_parameters,context):
+    return custom_reward_contextual(state,action,match_probs,reward_type,reward_parameters,context)*(1-lamb) + np.sum(state)/len(state)*lamb
+
 
 class MonteCarloTreeSearchNode():
     """Class which allows for MCTS to run
@@ -274,7 +278,7 @@ class StateAction():
                 last_action.append(0)
         last_action = np.array(last_action)
 
-        last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters)
+        last_reward = get_reward_custom_contextual(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.context)
         last_reward -= np.sum(last_state)/len(last_state)*self.lamb 
         arm_q = get_multi_Q(last_state,last_action,self.env,self.lamb,memory_shapley,[0 for i in range(len(last_action))])
 
@@ -291,7 +295,7 @@ class StateAction():
                     else:
                         action_0_1.append(0)
                 action_0_1 = np.array(action_0_1)
-                total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters)
+                total_reward += self.discount**i * get_reward_custom_contextual(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters)
             return last_action, total_reward 
         
         return last_action, last_reward + arm_q         

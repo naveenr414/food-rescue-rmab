@@ -1,7 +1,7 @@
 import gym
 import numpy as np
 from rmab.fr_dynamics import  get_food_rescue, get_food_rescue_top
-from rmab.utils import custom_reward
+from rmab.utils import custom_reward_contextual, generate_random_context
 from rmab.baseline_policies import random_policy
 import random
 import torch 
@@ -39,7 +39,7 @@ class RMABSimulator(gym.Env):
     '''
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
-            discount,number_states=2,reward_style='state',match_probability_list = []):
+            discount,context_dim,number_states=2,reward_style='state',match_probability_list = [],contextual=True):
         '''
         Initialization
         '''
@@ -62,6 +62,7 @@ class RMABSimulator(gym.Env):
         self.power = None # For the submodular runs 
         self.avg_reward = 5
         self.reward_type = "probability"
+        self.context_dim = context_dim 
         self.reward_parameters = {}
 
         self.match_probability_list = np.array(self.match_probability_list)
@@ -120,12 +121,15 @@ class RMABSimulator(gym.Env):
         # current state initialization
         self.timestep    = 0
         self.states      = self.first_init_states[self.instance_count, self.episode_count, :]  # np.copy??
+        self.context = generate_random_context(self.context_dim)
         return self.observe()
 
     def reset(self):
         self.timestep      = 0
         self.episode_count += 1
         self.states        = self.first_init_states[self.instance_count, self.episode_count, :]
+        self.context = generate_random_context(self.context_dim)
+
         print(f'instance {self.instance_count}, ep {self.episode_count}')
 
         return self.observe()
@@ -148,6 +152,7 @@ class RMABSimulator(gym.Env):
         # Current state initialization
         self.timestep    = 0
         self.states      = self.sample_initial_states(self.cohort_size)
+
 
         return self.observe()
 
@@ -189,6 +194,7 @@ class RMABSimulator(gym.Env):
 
         self.states = next_states.astype(int)
         self.timestep += 1
+        self.context = generate_random_context(self.context_dim)
 
         done = self.is_terminal()
 
@@ -216,7 +222,7 @@ class RMABSimulator(gym.Env):
             if action is None:
                 return 0
             else:
-                return custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type,self.reward_parameters)
+                return custom_reward_contextual(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type,self.reward_parameters,self.context)
 
 def assert_valid_transition(transitions):
     """Determine if a set of transitions is valid;
@@ -486,6 +492,7 @@ def create_environment(parameters,max_transition_prob=0.25):
     Returns: Simulator, RMABSimulator object"""
 
     seed = parameters['seed']
+    context_dim = parameters['context_dim']
     prob_distro = parameters['prob_distro']
     volunteers_per_arm = parameters['volunteers_per_arm']
     reward_type = parameters['reward_type']
@@ -512,7 +519,7 @@ def create_environment(parameters,max_transition_prob=0.25):
                                         parameters['volunteers_per_arm'])
 
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
-                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=2, reward_style='custom',match_probability_list=match_probabilities)
+                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,context_dim,number_states=2, reward_style='custom',match_probability_list=match_probabilities)
 
     if parameters['prob_distro'] == "one_time":
         N = parameters['n_arms']*parameters['volunteers_per_arm']
