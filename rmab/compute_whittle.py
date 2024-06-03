@@ -73,6 +73,68 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
     # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
     return Q_func[state,:]
 
+def get_q_vals_multi_state(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
+                        match_prob=0.5,get_v=False,num_arms=1):
+    """Get the Q values for one arm
+
+    Arguments: 
+        transitions: 2x2 numpy array; P_{i}(s,a,1)
+        state: integer, which state s_{i} (0 or 1) is an arm in
+        predicted_subsidy: float, w, how much to penalize pulling an arm by
+        discount: float, \gamma, discount for reward
+        lamb: float, \alpha, tradeoff between R_{i} and R_{glob}
+        match_prob: p_{i}(s_{i}), current marginal reward
+        num_arms: N, total number of arms
+
+    Returns: List of Q values for current state; [Q(s,0),Q(s,1)] 
+    """
+    assert discount < 1
+
+    n_states, n_actions, _ = transitions.shape
+    value_func = np.array([random.random() for i in range(n_states)])
+    difference = np.ones((n_states))
+    iters = 0
+
+
+    # lambda-adjusted reward function
+    def reward(s, a):
+        return s/num_arms - a * predicted_subsidy
+
+    def reward_matching(s,a):
+        return s*a*match_prob - a*predicted_subsidy 
+
+    def combined_reward(s,a):
+        rew = s*a*match_prob*(1-lamb) + lamb*s/num_arms - a*predicted_subsidy 
+        return rew 
+
+    while np.max(difference) >= threshold:
+        iters += 1
+        orig_value_func = np.copy(value_func)
+
+        # calculate Q-function
+        Q_func = np.zeros((n_states, n_actions))
+        for s in range(n_states):
+            for a in range(n_actions):
+                if reward_function == 'activity':
+                    r = reward  
+                elif reward_function == 'matching':
+                    r = reward_matching 
+                elif reward_function == 'combined':
+                    r = combined_reward
+                else:
+                    raise Exception("Reward function {} not found".format(reward_function))
+
+                for s_prime in range(n_states):
+                    Q_func[s,a] += transitions[s,a,s_prime]* (r(s, a) + discount * value_func[s_prime])
+
+            value_func[s] = np.max(Q_func[s, :])
+
+        difference = np.abs(orig_value_func - value_func)
+
+    # print(f'q values {Q_func[state, :]}, action {np.argmax(Q_func[state, :])}')
+    return Q_func[state,:]
+
+
 
 def arm_value_iteration(transitions, state, predicted_subsidy, discount, threshold=value_iteration_threshold,reward_function='activity',lamb=0,
                         match_prob=0.5,num_arms=1):
@@ -176,6 +238,41 @@ def arm_compute_whittle_multi_prob(transitions, state, discount, subsidy_break, 
     subsidy = (ub + lb) / 2
 
     return subsidy
+
+def arm_compute_whittle_multi_state(transitions, state, discount, subsidy_break, eps=whittle_threshold,reward_function='activity',lamb=0,match_prob=0.5,match_probability_list=[],get_v=False,num_arms=1):
+    """Get the Whittle index for one arm when there's multiple states
+
+    Arguments: 
+        transitions: 3x2x3 numpy array; P_{i}
+        state: integer, which state s_{i} (0 or 1 or 2) is an arm in
+        discount: float, \gamma, discount for reward
+        lamb: float, \alpha, tradeoff between R_{i} and R_{glob}
+        match_prob: p_{i}(s_{i}), current marginal reward
+        num_arms: N, total number of arms
+    
+    Returns: float, Whittle Index, w_{i}(s_{i})
+    """
+
+    lb, ub = get_init_bounds(transitions,lamb) # return lower and upper bounds on WI
+
+    while abs(ub - lb) > eps:
+        predicted_subsidy = (lb + ub) / 2
+
+        action = np.argmax(get_q_vals_multi_state(transitions,state,predicted_subsidy,discount,value_iteration_threshold,reward_function=reward_function,lamb=lamb,match_prob=match_prob,num_arms=num_arms))
+
+        if action == 0:
+            # optimal action is passive: subsidy is too high
+            ub = predicted_subsidy
+        elif action == 1:
+            # optimal action is active: subsidy is too low
+            lb = predicted_subsidy
+        else:
+            raise Exception(f'action not binary: {action}')
+    
+    subsidy = (ub + lb) / 2
+
+    return subsidy
+
 
 def arm_value_iteration_exponential(all_transitions, discount, budget, volunteers_per_arm, reward_type,reward_parameters,threshold=value_iteration_threshold,reward_function='matching',lamb=0,power=None,match_probability_list=[]):
     """Run Q Iteration for the exponential state space of all state/action combinations 
