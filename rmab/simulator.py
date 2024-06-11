@@ -410,7 +410,7 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
 
     np.random.seed(seed)
     probs_by_partition = []
-    if prob_distro == "uniform":
+    if prob_distro == "uniform" or prob_distro == "linearity":
         all_population_size = 100 
         all_transitions = create_random_transitions(all_population_size,max_transition_prob)
     elif prob_distro == "food_rescue":
@@ -428,7 +428,7 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
         all_transitions = np.zeros((all_population_size,2,2,2))
         all_transitions[:,:,1,0] = 1
         all_transitions[:,1,0,1] = 1
-        all_transitions[:,0,0,0] = 1
+        all_transitions[:,0,0,0] = 1        
     else:
         raise Exception("Probability distribution {} not found".format(prob_distro))
     
@@ -522,6 +522,19 @@ def create_environment(parameters,max_transition_prob=0.25):
         random.shuffle(shuffled_list)
 
         simulator.match_probability_list[simulator.cohort_selection[0]] = shuffled_list
+
+    if parameters['prob_distro'] == "linearity":
+        set_list = []
+
+        for i in range(budget):
+            set_list.append(set(list(range(1,int(parameters['arm_set_high'])+1))))
+        
+        for i in range(n_arms*volunteers_per_arm-budget):
+            nums = list(range(1,int(parameters['universe_size'])+1))[i*int(parameters['arm_set_low']):(i+1)*int(parameters['arm_set_low']):]
+            set_list.append(set(nums))
+        
+        simulator.match_probability_list[simulator.cohort_selection[0]]  = set_list 
+
 
     simulator.reward_type = parameters['reward_type'] 
     simulator.reward_parameters = {'universe_size': parameters['universe_size'],

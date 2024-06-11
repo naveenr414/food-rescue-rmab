@@ -278,6 +278,7 @@ class StateAction():
         last_reward -= np.sum(last_state)/len(last_state)*self.lamb 
         arm_q = get_multi_Q(last_state,last_action,self.env,self.lamb,memory_shapley,[0 for i in range(len(last_action))])
 
+
         if self.use_raw_reward:
             total_reward = 0
             for i in range(self.max_rollout_actions//self.budget):
@@ -405,11 +406,13 @@ def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setu
     s.previous_state_actions = state_actions
     s.memory = memory 
     s.per_epoch_results = per_epoch_results
-    root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,time_limit=env.time_limit)
+    s.whittle_index = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1])
+    root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,time_limit=env.time_limit,use_whittle=True)
     selected_idx = root.best_action(budget)
     memory = s.memory 
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
+
     
     return action, memory
 

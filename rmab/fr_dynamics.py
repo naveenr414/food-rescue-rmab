@@ -246,6 +246,73 @@ def get_transitions(data_by_user,num_rescues):
     
     return count_matrix 
 
+def get_transitions_multiple(data_by_user,num_rescues):
+    """Get the transition probabilities for a given agent with a total of 
+        num_rescues rescues
+        This differs as we consider varying levels of disengagement
+    
+    Arguments:
+        data_by_user: A dictionary mapping each user_id to a list of times they serviced
+        num_rescues: How many resuces the agent should have 
+
+    Returns: Matrix of size 2 (start state) x 2 (actions) x 2 (end state)
+        For each (start state, action), the resulting end states sum to 1
+    """
+    count_matrix = np.zeros((4,2,4))
+
+    # Edge case; with 1-rescue volunteers, they always go to inactive
+    if num_rescues == 1:
+        for i in range(count_matrix.shape[0]):
+            for j in range(count_matrix.shape[1]):
+                count_matrix[i][j][0] = 1
+        return count_matrix 
+    for user_id in data_by_user:
+        if len(data_by_user[user_id]) == num_rescues:
+            start_rescue = data_by_user[user_id][0]
+            end_rescue = data_by_user[user_id][-1]
+
+            week_dates = [start_rescue]
+            current_date = start_rescue 
+
+            while current_date <= end_rescue:
+                current_date += timedelta(weeks=1)
+                week_dates.append(current_date) 
+            
+            has_event = [0 for i in range(len(week_dates))]
+
+            current_week = 0
+            for i, rescue in enumerate(data_by_user[user_id]):
+                while rescue>week_dates[current_week]+timedelta(weeks=1):
+                    current_week += 1 
+                has_event[current_week] = 1
+
+            while len(has_event) < 5:
+                has_event.append(0)
+
+            for i in range(len(has_event)-2):
+                if has_event[i] == 1:
+                    start_state = 0
+                elif has_event[i] == 0 and (i == 0 or has_event[i-1] == 1):
+                    start_state = 1
+                elif has_event[i] == 0 and has_event[i-1] == 0 and (i == 1 or has_event[i-2] == 1):
+                    start_state = 2
+                else:
+                    continue 
+
+                action = has_event[i+1]
+
+                if has_event[i+2] == 0:
+                    end_state = start_state+1 
+                else:
+                    end_state = 0
+                count_matrix[start_state][action][end_state] += 1
+    for i in range(len(count_matrix)):
+        for j in range(len(count_matrix[i])):
+            if np.sum(count_matrix[i][j]) != 0:
+                count_matrix[i][j]/=(np.sum(count_matrix[i][j]))
+    count_matrix[3,:,3] = 1
+    return count_matrix 
+
 def compute_days_till(data_by_user,num_rescues=-1):
     """Compute the number of days till the rescues, as the number of rescues increases
     

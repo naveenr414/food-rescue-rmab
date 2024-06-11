@@ -181,7 +181,6 @@ dependencies:
       - pygame==2.5.2
       - pyopengl==3.1.7
       - pyparsing==3.1.1
-      - python-graphviz==0.20.1
       - pytimeparse==1.1.8
       - pyyaml==6.0.1
       - referencing==0.30.2
@@ -194,9 +193,6 @@ dependencies:
       - sympy==1.12
       - termcolor==2.3.0
       - toml==0.10.2
-      - torch==1.8.1+cu101
-      - torchaudio==0.8.1
-      - torchvision==0.9.1+cu101
       - tqdm==4.66.1
       - treevalue==1.4.12
       - triton==2.1.0

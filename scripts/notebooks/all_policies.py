@@ -39,9 +39,9 @@ is_jupyter = 'ipykernel' in sys.modules
 # +
 if is_jupyter: 
     seed        = 50
-    n_arms      = 4
+    n_arms      = 20
     volunteers_per_arm = 1
-    budget      = 2
+    budget      = 10
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 105
@@ -49,9 +49,9 @@ if is_jupyter:
     n_epochs    = 1
     save_with_date = False 
     lamb = 0.5
-    prob_distro = 'uniform'
-    reward_type = "set_cover"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 6, 'arm_set_high': 8}
+    prob_distro = 'food_rescue_top'
+    reward_type = "probability"
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1}
     out_folder = 'iterative'
     time_limit = 100
 else:
@@ -134,6 +134,9 @@ results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
 results['ratio'] = simulator.ratio 
 print(np.mean(rewards['reward']))
+# -
+
+simulator.match_probability_list[0]
 
 # +
 policy = random_policy

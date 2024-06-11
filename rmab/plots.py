@@ -92,7 +92,7 @@ def aggregate_normalize_data(results,baseline=None):
                 if data_type in avg_by_type:
                     if type(avg_by_type[data_type]) == type(np.array([1,2])):
                         data_point[key] = data_point[key]/avg_by_type[data_type]
-                        data_point[key] -= 1
+                        # data_point[key] -= 1
                     else:
                         data_point[key][0] /= float(avg_by_type[data_type])
 
