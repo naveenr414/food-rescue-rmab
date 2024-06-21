@@ -12,7 +12,7 @@ import rmab.secret as secret
 from rmab.utils import partition_volunteers
 
 
-def get_food_rescue(all_population_size):
+def get_food_rescue(all_population_size,match=False):
     """Get the transitions for Food Rescue
     
     Arguments:
@@ -35,13 +35,14 @@ def get_food_rescue(all_population_size):
 
     partitions = partition_volunteers(probs_by_num,all_population_size)
     probs_by_partition = []
-    all_transitions = get_all_transitions_partition(all_population_size,partitions)
 
     for i in range(len(partitions)):
         temp_probs = []
         for j in partitions[i]:
             temp_probs += (probs_by_num[j])
         probs_by_partition.append(temp_probs)
+
+    all_transitions = get_all_transitions_partition(all_population_size,partitions,probs_by_partition,match=match)
 
     for i,partition in enumerate(partitions):
         current_transitions = np.array(all_transitions[i])
@@ -130,7 +131,7 @@ def get_data_all_users(cursor):
 
     return data_by_user 
 
-def get_all_transitions_partition(population_size,partition):
+def get_all_transitions_partition(population_size,partition,probs_by_partition,match=False):
     """Get a numpy matrix with all the transition probabilities for each type of agent
     
     Arguments: 
@@ -156,8 +157,11 @@ def get_all_transitions_partition(population_size,partition):
 
     for p in partition:
         temp_transition = []
-        for i in p:
-            temp_transition.append(get_transitions(data_by_user,i))
+        for idx,i in enumerate(p):
+            if match:
+                temp_transition.append(get_transitions_multiple_states_match(data_by_user,i,random.choice(probs_by_partition[idx])))
+            else:
+                temp_transition.append(get_transitions(data_by_user,i))
         transitions.append(temp_transition)
     return transitions
 
@@ -245,6 +249,124 @@ def get_transitions(data_by_user,num_rescues):
                 count_matrix[i][j] = np.array([0.5,0.5])
     
     return count_matrix 
+
+def get_transitions_multiple_states(data_by_user,num_rescues):
+    """Get the transition probabilities for a given agent with a total of 
+        num_rescues rescues
+        This differs as we consider varying levels of disengagement
+    
+    Arguments:
+        data_by_user: A dictionary mapping each user_id to a list of times they serviced
+        num_rescues: How many resuces the agent should have 
+
+    Returns: Matrix of size 2 (start state) x 2 (actions) x 2 (end state)
+        For each (start state, action), the resulting end states sum to 1
+    """
+    count_matrix = np.zeros((4,2,4))
+    all_lists = []
+
+    for user_id in data_by_user:
+        if len(data_by_user[user_id]) == num_rescues:
+            start_rescue = data_by_user[user_id][0]
+            end_rescue = data_by_user[user_id][-1]
+
+            week_dates = [start_rescue]
+            current_date = start_rescue 
+
+            while current_date <= end_rescue:
+                current_date += timedelta(weeks=1)
+                week_dates.append(current_date) 
+            
+            has_event = [0 for i in range(len(week_dates))]
+
+            current_week = 0
+            for i, rescue in enumerate(data_by_user[user_id]):
+                while rescue>week_dates[current_week]+timedelta(weeks=1):
+                    current_week += 1 
+                has_event[current_week] += 1
+            
+            all_lists += has_event 
+            for i in range(len(has_event)-2):
+                count_matrix[min(has_event[i]+1,3)][min(has_event[i+1],1)][min(has_event[i+2]+1,3)] += 1
+
+    count_matrix[1,0,0] = 0.0001*np.sum(count_matrix[1,0])
+
+    for i in range(len(count_matrix)):
+        for j in range(len(count_matrix[i])):
+            if np.sum(count_matrix[i][j]) != 0:
+                if np.sum(count_matrix[i][j]) > 0:
+                    count_matrix[i][j]/=(np.sum(count_matrix[i][j]))
+
+    count_matrix[0,:,0] = 1
+
+    return count_matrix
+
+def get_transitions_multiple_states_match(data_by_user,num_rescues,match_probability):
+    """Get the transition probabilities for a given agent with a total of 
+        num_rescues rescues and match probability 
+        This differs as we consider varying levels of disengagement
+    
+    Arguments:
+        data_by_user: A dictionary mapping each user_id to a list of times they serviced
+        num_rescues: How many resuces the agent should have 
+
+    Returns: Matrix of size 7 (start state) x 2 (actions) x 7 (end state)
+        For each (start state, action), the resulting end states sum to 1
+    """
+    count_matrix = np.zeros((4,2,4))
+    all_lists = []
+
+    for user_id in data_by_user:
+        if len(data_by_user[user_id]) == num_rescues:
+            start_rescue = data_by_user[user_id][0]
+            end_rescue = data_by_user[user_id][-1]
+
+            week_dates = [start_rescue]
+            current_date = start_rescue 
+
+            while current_date <= end_rescue:
+                current_date += timedelta(weeks=1)
+                week_dates.append(current_date) 
+            
+            has_event = [0 for i in range(len(week_dates))]
+
+            current_week = 0
+            for i, rescue in enumerate(data_by_user[user_id]):
+                while rescue>week_dates[current_week]+timedelta(weeks=1):
+                    current_week += 1 
+                has_event[current_week] += 1
+            
+            all_lists += has_event 
+            for i in range(len(has_event)-2):
+                count_matrix[min(has_event[i]+1,3)][min(has_event[i+1],1)][min(has_event[i+2]+1,3)] += 1
+
+    count_matrix[1,0,0] = 0.0001*np.sum(count_matrix[1,0])
+
+    for i in range(len(count_matrix)):
+        for j in range(len(count_matrix[i])):
+            if np.sum(count_matrix[i][j]) != 0:
+                if np.sum(count_matrix[i][j]) > 0:
+                    count_matrix[i][j]/=(np.sum(count_matrix[i][j]))
+
+    count_matrix[0,:,0] = 1
+
+    new_transition_probabilities = np.zeros((7,2,7))
+    new_transition_probabilities[0,:,0] = 1 
+
+    for i in range(1,4):
+        new_transition_probabilities[i,1,4] = match_probability
+        new_transition_probabilities[i,1,i] = (1-match_probability)*(1-(1-new_transition_probabilities[i,1,i])**3)
+        new_transition_probabilities[i,0,i] = (1-(1-new_transition_probabilities[i,0,i])**3)
+        new_transition_probabilities[i,1,:4] = count_matrix[i,0,:4]*(1-match_probability-new_transition_probabilities[i,1,i])
+        new_transition_probabilities[i,0,:4] = count_matrix[i,0,:4]*(new_transition_probabilities[i,0,i])
+        new_transition_probabilities[i,1,i] = (1-match_probability)*(1-(1-new_transition_probabilities[i,1,i])**3)
+        new_transition_probabilities[i,0,i] = (1-(1-new_transition_probabilities[i,0,i])**3)
+
+    new_transition_probabilities[4,:,:4] = count_matrix[1,1,:4]
+    new_transition_probabilities[5,:,:4] = count_matrix[2,1,:4]
+    new_transition_probabilities[6,:,:4] = count_matrix[3,1,:4]
+
+    return new_transition_probabilities
 
 def compute_days_till(data_by_user,num_rescues=-1):
     """Compute the number of days till the rescues, as the number of rescues increases
