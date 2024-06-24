@@ -340,6 +340,8 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
     elif custom_reward_type == "linear":
         probs = s*a*match_probabilities
         return np.sum(probs)
+    elif custom_reward_type == "global_transition":
+        return int(2 in s)
     else:
         raise Exception("Reward type {} not found".format(custom_reward_type))  
 

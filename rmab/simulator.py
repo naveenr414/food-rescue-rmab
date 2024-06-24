@@ -158,7 +158,7 @@ class RMABSimulator(gym.Env):
             cohort_size: the number of arms to be initialized
             prob: the probability of sampling 0 (not engaging state)
         '''
-        states = np.random.choice(a=self.number_states, size=cohort_size, p=[prob, 1-prob])
+        states = np.random.choice(a=2, size=cohort_size, p=[prob, 1-prob])
         return states
 
     def is_terminal(self):
@@ -177,7 +177,8 @@ class RMABSimulator(gym.Env):
         assert len(action) == self.cohort_size*self.volunteers_per_arm
         assert np.sum(action) <= self.budget
 
-        reward = self.get_reward(action)
+        if self.reward_type != 'global_transition':
+            reward = self.get_reward(action)
 
         next_states = np.zeros(self.cohort_size*self.volunteers_per_arm)
         for i in range(self.cohort_size):
@@ -187,7 +188,29 @@ class RMABSimulator(gym.Env):
                 next_state = np.random.choice(a=self.number_states, p=prob)
                 next_states[idx] = next_state
 
+        if self.reward_type == 'global_transition':
+            if 2 in next_states: 
+                reward = 1
+            else:
+                reward = 0
+
+        if np.sum(next_states == 2) > 0:
+            all_2s = [i for i in range(len(next_states)) if next_states[i] == 2]
+            actual_2 = np.random.choice(all_2s)
+            for i in all_2s:
+                while next_states[i] == 2:
+                    if i == actual_2:
+                        prob = self.transitions[i, 2, 1, :]
+                        next_state = np.random.choice(a=self.number_states, p=prob)
+                        next_states[i] = next_state 
+                    else:
+                        prob = self.transitions[i, self.states[idx], action[idx], :]
+                        next_state = np.random.choice(a=self.number_states, p=prob)
+                        next_states[i] = next_state 
+
         self.states = next_states.astype(int)
+
+
         self.timestep += 1
 
         done = self.is_terminal()
@@ -431,7 +454,27 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
         all_transitions = np.zeros((all_population_size,2,2,2))
         all_transitions[:,:,1,0] = 1
         all_transitions[:,1,0,1] = 1
-        all_transitions[:,0,0,0] = 1        
+        all_transitions[:,0,0,0] = 1   
+    elif prob_distro == "global_transition":
+        all_population_size = 100 
+        transitions = np.zeros((all_population_size,3,2,3))
+        for i in range(all_population_size):
+            transitions[i,0,0,1] = np.random.uniform(0,0.25)
+            transitions[i,0,0,0] = 1-transitions[i,0,0,1]
+            transitions[i,0,1,1] = np.random.uniform(transitions[i,0,0,1],1)
+            transitions[i,1,0,1] = np.random.uniform(transitions[i,0,0,1],1)
+            transitions[i,1,0,0] = 1-transitions[i,1,0,1]
+            transitions[i,1,1,1] = np.random.uniform(max(transitions[i,0,1,1],transitions[i,1,0,1]),1)
+            transitions[i,1,1,2] = np.random.uniform(0,1-transitions[i,1,1,1])
+            transitions[i,0,1,2] = np.random.uniform(0,min(transitions[i,1,1,2],1-transitions[i,0,1,1]))
+            transitions[i,2,0,0] = transitions[i,2,0,1] = 0
+            transitions[i,2,1,1] = np.random.uniform(transitions[i,1,1,1],1)
+            transitions[i,2,1,0] = 1-transitions[i,2,1,1]
+
+            transitions[i,0,1,0] = 1-transitions[i,0,1,1]-transitions[i,0,1,2]
+            transitions[i,1,1,0] = 1-transitions[i,1,1,1]-transitions[i,1,1,2]
+                
+        all_transitions = transitions 
     else:
         raise Exception("Probability distribution {} not found".format(prob_distro))
     
@@ -514,8 +557,12 @@ def create_environment(parameters,max_transition_prob=0.25):
     match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,
                                         parameters['volunteers_per_arm'])
 
+    if prob_distro == "global_transition":
+        n_states = 3
+    else:
+        n_states = 2
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
-                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=2, reward_style='custom',match_probability_list=match_probabilities)
+                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='custom',match_probability_list=match_probabilities)
 
     if parameters['prob_distro'] == "one_time":
         N = parameters['n_arms']*parameters['volunteers_per_arm']
