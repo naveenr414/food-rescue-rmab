@@ -177,7 +177,7 @@ class RMABSimulator(gym.Env):
         assert len(action) == self.cohort_size*self.volunteers_per_arm
         assert np.sum(action) <= self.budget
 
-        if self.reward_type != 'global_transition':
+        if 'global_transition' not in self.prob_distro:
             reward = self.get_reward(action)
 
         next_states = np.zeros(self.cohort_size*self.volunteers_per_arm)
@@ -188,13 +188,15 @@ class RMABSimulator(gym.Env):
                 next_state = np.random.choice(a=self.number_states, p=prob)
                 next_states[idx] = next_state
 
-        if self.reward_type == 'global_transition':
+        if 'global_transition' in self.prob_distro:
             if 2 in next_states: 
                 reward = 1
             else:
                 reward = 0
 
+        # We have an arm that got matched
         if np.sum(next_states == 2) > 0:
+            # Compute which arm actually got matched + transition all appropriately
             all_2s = [i for i in range(len(next_states)) if next_states[i] == 2]
             actual_2 = np.random.choice(all_2s)
             for i in all_2s:
@@ -418,6 +420,33 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
             all_rewards.append(reward)
     return all_rewards
 
+def get_average_reward(global_reward,active_rate,discount,lamb):
+    """Compute the discounted combination of global reward and active rate
+    
+    Arguments: 
+        global_reward: numpy array of size n_epochs x T
+        active_rate: numpy array of size n_epochs x T
+        discount: float, gamma
+
+    Returns: Float, average discounted reward across all epochs"""
+
+    all_rewards = []
+    combined_reward = global_reward*(1-lamb) + lamb*active_rate
+
+    num_steps = 1
+
+    step_size = len(global_reward[0])//num_steps
+
+    for epoch in range(len(global_reward)):
+        for i in range(num_steps):
+            reward = 0
+            for t in range(i*step_size,(i+1)*step_size):
+                reward += combined_reward[epoch,t]/step_size
+            all_rewards.append(reward)
+    return all_rewards
+
+
+
 def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
     """Create the specific transition probabilities for a given probability distribution, seed
     
@@ -455,26 +484,93 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
         all_transitions[:,:,1,0] = 1
         all_transitions[:,1,0,1] = 1
         all_transitions[:,0,0,0] = 1   
+    
+    # Transitions for the Global Transition problem
     elif prob_distro == "global_transition":
         all_population_size = 100 
         transitions = np.zeros((all_population_size,3,2,3))
         for i in range(all_population_size):
             transitions[i,0,0,1] = np.random.uniform(0,0.25)
-            transitions[i,0,0,0] = 1-transitions[i,0,0,1]
             transitions[i,0,1,1] = np.random.uniform(transitions[i,0,0,1],1)
             transitions[i,1,0,1] = np.random.uniform(transitions[i,0,0,1],1)
-            transitions[i,1,0,0] = 1-transitions[i,1,0,1]
-            transitions[i,1,1,1] = np.random.uniform(max(transitions[i,0,1,1],transitions[i,1,0,1]),1)
+            transitions[i,1,1,1] = np.random.uniform(max(transitions[i,0,1,1],transitions[i,1,0,1]),1.0)
             transitions[i,1,1,2] = np.random.uniform(0,1-transitions[i,1,1,1])
-            transitions[i,0,1,2] = np.random.uniform(0,min(transitions[i,1,1,2],1-transitions[i,0,1,1]))
-            transitions[i,2,0,0] = transitions[i,2,0,1] = 0
             transitions[i,2,1,1] = np.random.uniform(transitions[i,1,1,1],1)
+            
+            transitions[i,0,0,0] = 1-transitions[i,0,0,1]
+            transitions[i,1,0,0] = 1-transitions[i,1,0,1]
+            transitions[i,0,1,2] = 0
+            transitions[i,2,0,0] = transitions[i,2,0,1] = 0
             transitions[i,2,1,0] = 1-transitions[i,2,1,1]
-
             transitions[i,0,1,0] = 1-transitions[i,0,1,1]-transitions[i,0,1,2]
             transitions[i,1,1,0] = 1-transitions[i,1,1,1]-transitions[i,1,1,2]
                 
         all_transitions = transitions 
+    elif prob_distro == "global_transition_extreme":
+        all_population_size = 100 
+        transitions = np.zeros((all_population_size,3,2,3))
+        for i in range(all_population_size):            
+            transitions[i,0,0,1] = 0
+            transitions[i,0,1,1] = 0.01
+            transitions[i,1,0,1] = 0
+            transitions[i,1,1,1] = 0.001
+            transitions[i,1,1,2] = 0.999
+
+            if np.random.random() <= 0.25:
+                transitions[i,2,1,1] = 1
+            else:
+                transitions[i,2,1,1] = 0
+
+            transitions[i,0,0,0] = 1-transitions[i,0,0,1]
+            transitions[i,1,0,0] = 1-transitions[i,1,0,1]
+            transitions[i,0,1,2] = 0
+            transitions[i,2,0,0] = transitions[i,2,0,1] = 0
+            transitions[i,2,1,0] = 1-transitions[i,2,1,1]
+            transitions[i,0,1,0] = 1-transitions[i,0,1,1]-transitions[i,0,1,2]
+            transitions[i,1,1,0] = 1-transitions[i,1,1,1]-transitions[i,1,1,2]
+                
+        all_transitions = transitions 
+    elif prob_distro == "global_transition_high_match":
+        all_population_size = 100 
+        transitions = np.zeros((all_population_size,3,2,3))
+        for i in range(all_population_size):
+            transitions[i,0,0,1] = np.random.uniform(0,0.25)
+            transitions[i,0,1,1] = np.random.uniform(transitions[i,0,0,1],0.75)
+            transitions[i,1,0,1] = np.random.uniform(transitions[i,0,0,1],0.75)
+            transitions[i,1,1,1] = np.random.uniform(max(transitions[i,0,1,1],transitions[i,1,0,1]),0.75)
+            transitions[i,1,1,2] = np.random.uniform(0.25,1-transitions[i,1,1,1])
+            transitions[i,2,1,1] = np.random.uniform(transitions[i,1,1,1],1)
+            
+            transitions[i,0,0,0] = 1-transitions[i,0,0,1]
+            transitions[i,1,0,0] = 1-transitions[i,1,0,1]
+            transitions[i,0,1,2] = 0
+            transitions[i,2,0,0] = transitions[i,2,0,1] = 0
+            transitions[i,2,1,0] = 1-transitions[i,2,1,1]
+            transitions[i,0,1,0] = 1-transitions[i,0,1,1]-transitions[i,0,1,2]
+            transitions[i,1,1,0] = 1-transitions[i,1,1,1]-transitions[i,1,1,2]
+                
+        all_transitions = transitions 
+    elif prob_distro == "global_transition_high_match_impact":
+        all_population_size = 100 
+        transitions = np.zeros((all_population_size,3,2,3))
+        for i in range(all_population_size):
+            transitions[i,0,0,1] = np.random.uniform(0,0.25)
+            transitions[i,0,1,1] = np.random.uniform(transitions[i,0,0,1],1)
+            transitions[i,1,0,1] = np.random.uniform(transitions[i,0,0,1],1)
+            transitions[i,1,1,1] = np.random.uniform(max(transitions[i,0,1,1],transitions[i,1,0,1]),1.0)
+            transitions[i,1,1,2] = np.random.uniform(0,1-transitions[i,1,1,1])
+            transitions[i,2,1,1] = np.random.uniform(transitions[i,1,1,1]*1/3 + 2/3*1,1)
+            
+            transitions[i,0,0,0] = 1-transitions[i,0,0,1]
+            transitions[i,1,0,0] = 1-transitions[i,1,0,1]
+            transitions[i,0,1,2] = 0
+            transitions[i,2,0,0] = transitions[i,2,0,1] = 0
+            transitions[i,2,1,0] = 1-transitions[i,2,1,1]
+            transitions[i,0,1,0] = 1-transitions[i,0,1,1]-transitions[i,0,1,2]
+            transitions[i,1,1,0] = 1-transitions[i,1,1,1]-transitions[i,1,1,2]
+                
+        all_transitions = transitions 
+
     else:
         raise Exception("Probability distribution {} not found".format(prob_distro))
     
@@ -554,10 +650,14 @@ def create_environment(parameters,max_transition_prob=0.25):
     all_features = np.arange(all_population_size)
     N = all_population_size*volunteers_per_arm
 
-    match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,
-                                        parameters['volunteers_per_arm'])
 
-    if prob_distro == "global_transition":
+    if "global_transition" not in prob_distro:
+        match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,
+                                            parameters['volunteers_per_arm'])
+    else:
+        match_probabilities = all_transitions[:,1,1,2]
+
+    if "global_transition" in prob_distro:
         n_states = 3
     else:
         n_states = 2
@@ -585,6 +685,8 @@ def create_environment(parameters,max_transition_prob=0.25):
         
         simulator.match_probability_list[simulator.cohort_selection[0]]  = set_list 
 
+    # TODO: Remove this
+    # simulator.first_init_states = np.array([[[1 for i in range(n_arms)] for i in range(parameters['n_episodes'])]])
 
     simulator.reward_type = parameters['reward_type'] 
     simulator.reward_parameters = {'universe_size': parameters['universe_size'],
@@ -592,6 +694,7 @@ def create_environment(parameters,max_transition_prob=0.25):
     'arm_set_high': parameters['arm_set_high']} 
     simulator.time_limit = parameters['time_limit']
     simulator.ratio = 0
+    simulator.prob_distro = prob_distro
     
     return simulator 
 
@@ -658,7 +761,9 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
         match = match.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
         active_rate = active_rate.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
         time_whittle = simulator.time_taken
-        discounted_reward = get_discounted_reward(match,active_rate,parameters['discount'],parameters['lamb'])
+                
+        # TODO: Change this back to discounted_reward
+        discounted_reward = get_average_reward(match,active_rate,parameters['discount'],parameters['lamb'])
         scores['reward'].append(discounted_reward)
         scores['time'].append(time_whittle)
         scores['match'].append(np.mean(match))

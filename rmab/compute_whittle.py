@@ -2,6 +2,7 @@ import numpy as np
 from itertools import product, combinations
 from rmab.utils import binary_to_decimal, list_to_binary, custom_reward
 import random 
+from copy import deepcopy
 
 whittle_threshold = 1e-6
 value_iteration_threshold = 1e-6
@@ -369,6 +370,132 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
             value_func[s_rep] = np.max(Q_func[s_rep, :])
         difference = np.abs(orig_value_func - value_func)
     return Q_func 
+
+def arm_value_iteration_exponential_global_transition(all_transitions, discount, budget, volunteers_per_arm, reward_type,reward_parameters,threshold=value_iteration_threshold,reward_function='matching',lamb=0,power=None,match_probability_list=[]):
+    """Run Q Iteration for the exponential state space of all state/action combinations 
+
+    Arguments:
+        all_transitions: Numpy array of size (N,|S|,|A|,|S|)
+        discount: \gamma, float
+        budget: K, integer, max arms to pull
+        volunteers_per_arm: When using multiple arms with the same transition probability
+            We have volunteers_per_arm arms with all_transitions[0], volunteers_per_arm with all_transitions[1], etc.
+        reward_type: Either 'activity' (maximize for R_{i}(s_{i},a_{i})) or 'custom' (maximize for R(s,a))
+        reward_parameters: Dictionary with three keys: arm_set_low, arm_set_high, and universize_size (m)
+            This defines the range of m_{i} or Y_{i} values for reward functions
+        lamb: float, \alpha, tradeoff between R_{i} and R_{glob}
+        match_probability_list: The m_{i} or Y_{i} values 
+
+    Returns: Q_func, numpy matrix with Q values for each combination of states, 
+        and each combination of actions
+        This is encoded as a 2^N x 2^N matrix, where a state is encoded in binary
+    """
+    assert discount < 1
+    n_arms, _ = all_transitions.shape[0], all_transitions.shape[2]
+    
+    N = len(match_probability_list)
+    num_real_states = 2**(N)
+    value_func = np.array([random.random() for i in range(num_real_states)])
+    difference = np.ones((num_real_states))
+    iters = 0
+    match_probability_list = np.array(match_probability_list)
+    
+    all_s = np.array(list(product([0, 1], repeat=N)))
+    all_s = [np.array(i) for i in all_s]
+    
+    all_a = []
+    for b in range(budget+1):
+        all_a += list(combinations(range(N), b))    
+
+    all_a = [np.array(list_to_binary(i,N)) for i in all_a]
+
+    def reward(s,a):
+        return np.sum(s)/len(s)*(lamb)
+
+    r = reward 
+
+    precomputed_transition_probabilities_intermediate_state = np.zeros((num_real_states,num_real_states,N+1))
+
+    for s in all_s:
+        s_rep = binary_to_decimal(s) 
+
+        for middle_2 in range(N+1):
+            for a in all_a:
+                a_rep = binary_to_decimal(a)
+                
+                if middle_2 == N:
+                    transition_probability = np.prod([1-all_transitions[i//volunteers_per_arm][s[i]][a[i]][2]
+                            for i in range(N)])
+                else:
+                    if a[middle_2] == 0:
+                        transition_probability = 0
+                    else:
+                        total_pulled = np.sum(a) 
+                        pulled_probs = [all_transitions[i//volunteers_per_arm][s[i]][a[i]][2] for i in range(N) if a[i] == 1 and i != middle_2] 
+                        
+                        if len(pulled_probs) == 0:
+                            transition_probability = all_transitions[middle_2//volunteers_per_arm][s[middle_2]][a[middle_2]][2]
+                        else:
+                            temp_sum = 0
+                            for i in range(total_pulled):
+                                temp_sum += (1-np.mean(pulled_probs))**i 
+                            temp_sum *= all_transitions[middle_2//volunteers_per_arm][s[middle_2]][a[middle_2]][2]/total_pulled 
+                            transition_probability = temp_sum
+                
+                precomputed_transition_probabilities_intermediate_state[s_rep][a_rep][middle_2] = transition_probability
+
+    transitions_without_2 = deepcopy(all_transitions)
+    for i in range(len(transitions_without_2)):
+        for j in range(2):
+            for k in range(2):
+                transitions_without_2[i,j,k,:2] /= sum(transitions_without_2[i,j,k,:2])
+
+    precomputed_transition_probabilities = np.zeros((num_real_states,N+1,num_real_states,num_real_states))
+
+    for s in all_s:
+        s_rep = binary_to_decimal(s) 
+
+        for middle_2 in range(N+1):
+            for s_prime in all_s:
+                s_prime_rep = binary_to_decimal(s_prime) 
+
+                for a in all_a:
+                    a_rep = binary_to_decimal(a)
+
+                    if middle_2 == N:
+                        transition_probability = np.prod([transitions_without_2[i//volunteers_per_arm][s[i]][a[i]][s_prime[i]]
+                                    for i in range(N)])
+                    else:
+                        transition_probability = np.prod([transitions_without_2[i//volunteers_per_arm][s[i]][a[i]][s_prime[i]] 
+                                    if i != middle_2 else transitions_without_2[i//volunteers_per_arm][2][1][s_prime[i]] 
+                                    for i in range(N)])
+                    precomputed_transition_probabilities[s_rep][middle_2][a_rep][s_prime_rep] = transition_probability
+        
+    # Perform Q Iteration 
+    while np.max(difference) >= threshold:
+        iters += 1
+        orig_value_func = np.copy(value_func)
+
+        Q_func = np.zeros((num_real_states, num_real_states))
+        for s in all_s:
+            s_rep = binary_to_decimal(s) 
+            for a in all_a:
+                a_rep = binary_to_decimal(a)
+
+                for s_prime in all_s:
+                    s_prime_rep = binary_to_decimal(s_prime)
+
+                    for middle_2 in range(N+1):
+                        if middle_2 == N:
+                            Q_func[s_rep,a_rep] += precomputed_transition_probabilities_intermediate_state[s_rep,a_rep,middle_2]*precomputed_transition_probabilities[s_rep,middle_2,a_rep,s_prime_rep] * (r(s,a)
+                                + discount * value_func[s_prime_rep])
+                        else:
+                            Q_func[s_rep,a_rep] += precomputed_transition_probabilities_intermediate_state[s_rep,a_rep,middle_2]*precomputed_transition_probabilities[s_rep,middle_2,a_rep,s_prime_rep] * ((1-lamb)+r(s,a)
+                                + discount * value_func[s_prime_rep])
+            value_func[s_rep] = np.max(Q_func[s_rep, :])
+        difference = np.abs(orig_value_func - value_func)
+    return Q_func 
+
 
 def get_multi_Q(state,action,env,lamb,match_prob,match_prob_now):
     """Compute the total reward (in terms of the Q value) given an action
