@@ -120,6 +120,57 @@ def shapley_index_custom(env,state,memoizer_shapley = {}):
 
     return shapley_indices, memoizer_shapley
 
+def compute_regression(env):
+    """Compute the Shapley index for matching; how much
+        does match probability increase when using some particular arm
+        u_{i}(s_{i})
+        
+    Arguments:
+        env: RMAB Simulator environment
+        state: Numpy array of 0-1 states for each volunteer, s_{i}
+        memoizer_shapley: Dictionary, to store previously computed Shapley indices
+        
+    Returns: Two things, shapley index, and updated dictionary"""
+
+    N = env.cohort_size*env.volunteers_per_arm
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    num_random_combos = env.shapley_iterations 
+
+    combinations = np.zeros((num_random_combos, N), dtype=int)
+    budget = env.budget 
+
+    budget_probs = np.array([scipy.special.comb(N,k) for k in range(0,budget+1)])
+    budget_probs /= np.sum(budget_probs)
+
+    for i in range(num_random_combos):
+        k = random.choices(list(range(len(budget_probs))), weights=budget_probs,k=1)[0]
+        ones_indices = random.sample(list(range(N)),k)
+        combinations[i, ones_indices] = 1
+
+    unique_X, indices = np.unique(combinations, axis=0, return_index=True)
+
+    # Sort indices to maintain original order
+    sorted_indices = np.sort(indices)
+
+    state = [1 for i in range(N)]
+    scores = []
+    for i in range(num_random_combos):
+        combo = combinations[i]
+        scores.append(custom_reward(state,combo,match_probabilities,env.reward_type,env.reward_parameters))
+    scores = np.array(scores)
+
+    X = combinations 
+    Y = scores
+
+    X = X[indices]
+    Y = Y[indices]
+
+    # Calculate the least squares solution
+    # Theta_best = (X_b.T * X_b)^-1 * X_b.T * Y
+    theta_best = np.linalg.inv(X.T @ X) @ X.T @ Y
+
+    return theta_best
+
 def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled):
     """Compute the Shapley index for matching; how much
         does match probability increase when using some particular arm
@@ -250,8 +301,8 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     if memory == None:
         memoizer = Memoizer('optimal')
-        average_context = get_average_context(env.context_dim)
-        match_probs = [custom_reward_contextual(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,average_context) for i in range(len(state))]
+        match_probs = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
+        print("Match probs {}".format(match_probs))
         for i in range(2):
             s = [i for _ in range(len(state))]
             whittle_index(env,s,budget,lamb,memoizer,reward_function="combined",match_probs=match_probs)
@@ -587,6 +638,40 @@ def shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_result
     if memory == None:
         memory_whittle = Memoizer('optimal')
         memory_shapley = np.array(shapley_index_custom(env,np.ones(len(state)),{})[0])
+    
+        for i in range(2):
+            s = [i for _ in range(len(state))]
+            whittle_index(env,s,budget,lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley)
+    else:
+        memory_whittle, memory_shapley = memory 
+
+    state_WI = whittle_index(env,state,budget,lamb,memory_whittle,reward_function="combined",match_probs=memory_shapley)
+
+    sorted_WI = np.argsort(state_WI)[::-1]
+    action = np.zeros(N, dtype=np.int8)
+    action[sorted_WI[:budget]] = 1
+
+    return action, (memory_whittle, memory_shapley)
+
+def regression_policy(env,state,budget,lamb,memory, per_epoch_results):
+    """Combination of the Whittle index + Regressed values
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and the Whittle memoizer"""
+
+
+    N = len(state)
+
+    if memory == None:
+        memory_whittle = Memoizer('optimal')
+        memory_shapley = compute_regression(env)
     
         for i in range(2):
             s = [i for _ in range(len(state))]

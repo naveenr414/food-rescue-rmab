@@ -311,6 +311,9 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
     elif custom_reward_type == "probability":
         probs = s*a*match_probabilities
         return 1-np.prod(1-probs)
+    elif custom_reward_type == "probability_random":
+        probs = s*a*match_probabilities
+        return int(np.random.random()<1-np.prod(1-probs))
     elif custom_reward_type == "two_by_two":
         probs = s*a*match_probabilities
         value_by_combo = {

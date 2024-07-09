@@ -7,6 +7,7 @@ import random
 import torch 
 from itertools import combinations
 import time 
+from copy import deepcopy
 
 class RMABSimulator(gym.Env):
     '''
@@ -63,6 +64,8 @@ class RMABSimulator(gym.Env):
         self.avg_reward = 5
         self.reward_type = "probability"
         self.reward_parameters = {}
+        self.past_states = []
+        self.past_actions = []
 
         self.match_probability_list = np.array(self.match_probability_list)
 
@@ -180,6 +183,9 @@ class RMABSimulator(gym.Env):
         if 'global_transition' not in self.prob_distro:
             reward = self.get_reward(action)
 
+        self.past_states.append(deepcopy(self.states))
+        self.past_actions.append(deepcopy(action))
+
         next_states = np.zeros(self.cohort_size*self.volunteers_per_arm)
         for i in range(self.cohort_size):
             for j in range(self.volunteers_per_arm):
@@ -211,7 +217,6 @@ class RMABSimulator(gym.Env):
                         next_states[i] = next_state 
 
         self.states = next_states.astype(int)
-
 
         self.timestep += 1
 
@@ -337,6 +342,7 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
     all_active_rate = np.zeros((n_epochs,test_T))
     env.train_epochs = T-test_T
     env.test_epochs = test_T
+    env.all_reward = all_reward
 
     inference_time_taken = 0
     train_time_taken = 0
@@ -385,6 +391,7 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
                 env.is_training =True 
             else:
                 all_reward[epoch, t-(T-test_T)] = reward
+            env.all_reward = all_reward
         inference_time_taken += time.time()-start 
     env.time_taken = inference_time_taken
     env.train_time = train_time_taken
