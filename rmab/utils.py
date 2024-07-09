@@ -305,6 +305,14 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
             if s[i]*a[i] == 1:
                 all_seen = all_seen.union(match_probabilities[i])
         return len(all_nums.intersection(all_seen))
+    if custom_reward_type == "set_cover_random":
+        num_elements = reward_parameters['universe_size']
+        all_nums = set([i for i in range(0,num_elements)])
+        all_seen = set() 
+        for i in range(len(s)):
+            if s[i]*a[i] == 1:
+                all_seen = all_seen.union(match_probabilities[i])
+        return len(all_nums.intersection(all_seen))+np.random.poisson(reward_parameters['arm_set_low']//2)
     elif custom_reward_type == "max":
         probs = s*a*match_probabilities
         return np.max(probs) 
@@ -375,8 +383,8 @@ def custom_reward_contextual(s,a,match_probabilities,custom_reward_type,reward_p
         match_probabilities = np.max(match_probabilities,0)
         probs = s*a*match_probabilities
         return np.max(probs) 
-    elif custom_reward_type == "probability":
-        match_probabilities = match_probabilities + context 
+    elif custom_reward_type == "probability_context":
+        match_probabilities = match_probabilities.dot(context) 
         match_probabilities = np.clip(match_probabilities,0,1)
         probs = s*a*match_probabilities
         return 1-np.prod(1-probs)
@@ -411,6 +419,79 @@ def custom_reward_contextual(s,a,match_probabilities,custom_reward_type,reward_p
         match_probabilities = np.clip(match_probabilities,0,1)
         probs = s*a*match_probabilities
         return np.sum(probs)
+    else:
+        raise Exception("Reward type {} not found".format(custom_reward_type))  
+
+def avg_reward_contextual(s,a,match_probabilities,custom_reward_type,reward_parameters):
+    """Custom defined submodular reward which is maximized by
+        each policy
+    
+    Arguments:
+        s: Numpy array for the state of length N
+        a: Numpy array for the action of lenghth N
+        match_probabilities: Numpy array with information for each arm
+            Of length N
+            For example, for set cover, match_probabilities contains
+            The set corresponding to each arm
+    
+    Returns: Float, reward"""
+
+    if custom_reward_type == "set_cover":
+        num_elements = reward_parameters['universe_size']
+        all_nums = set([i for i in range(0,num_elements)])
+        all_seen = set() 
+        for i in range(len(s)):
+            if s[i]*a[i] == 1:
+                all_seen = all_seen.union(match_probabilities[i])
+        return len(all_nums.intersection(all_seen))
+    if custom_reward_type == "set_cover_random":
+        num_elements = reward_parameters['universe_size']
+        all_nums = set([i for i in range(0,num_elements)])
+        all_seen = set() 
+        for i in range(len(s)):
+            if s[i]*a[i] == 1:
+                all_seen = all_seen.union(match_probabilities[i])
+        return len(all_nums.intersection(all_seen))+np.random.poisson(reward_parameters['arm_set_low']//2)
+    elif custom_reward_type == "max":
+        probs = s*a*match_probabilities
+        return np.max(probs) 
+    elif custom_reward_type == "probability_context":
+        probs = s*a*match_probabilities[:,0]
+        return 1-np.prod(1-probs)
+    elif custom_reward_type == "probability_random":
+        probs = s*a*match_probabilities
+        return int(np.random.random()<1-np.prod(1-probs))
+    elif custom_reward_type == "two_by_two":
+        probs = s*a*match_probabilities
+        value_by_combo = {
+            '0000': 0, 
+            '1000': probs[0], 
+            '0100': probs[1],
+            '0010': probs[2],
+            '0001': probs[3], 
+            '1100': max(probs[0],probs[1]), 
+            '1001': probs[0]+probs[3], 
+            '1010': max(probs[0],probs[2]),
+            '0110': max(probs[1],probs[2]), 
+            '0101': probs[1]+probs[3],
+            '0011': max(probs[2],probs[3]),
+            '0111': max(probs[1]+probs[3],probs[2]),
+            '1011': max(probs[0]+probs[3],probs[2]),
+            '1101': max(probs[0]+probs[3],probs[1]+probs[3]),
+            '1110': max(probs[0],max(probs[1],probs[2])),
+            '1111': max(max(probs[0],probs[1])+probs[3],probs[2])
+        }
+
+        str_state_action = s*a 
+        str_state_action = ''.join([str(i) for i in str_state_action])
+        val = value_by_combo[str_state_action]
+
+        return val 
+    elif custom_reward_type == "linear":
+        probs = s*a*match_probabilities
+        return np.sum(probs)
+    elif custom_reward_type == "global_transition":
+        return int(2 in s)
     else:
         raise Exception("Reward type {} not found".format(custom_reward_type))  
 

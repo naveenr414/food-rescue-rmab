@@ -1,5 +1,5 @@
 import numpy as np
-from rmab.utils import one_hot, get_average_context, custom_reward_contextual, custom_reward
+from rmab.utils import one_hot, get_average_context, custom_reward_contextual, custom_reward, avg_reward_contextual
 
 import random 
 
@@ -21,7 +21,11 @@ def greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
     N = len(state)
 
     score_by_agent = [0 for i in range(N)]
-    match_probabilities = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
+
+    if env.use_context:
+        match_probabilities = [avg_reward_contextual(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
+    else:
+        match_probabilities = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
     for i in range(N):
         activity_score = np.sum(state)
         

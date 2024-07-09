@@ -4,7 +4,7 @@ import numpy as np
 
 from rmab.utils import Memoizer
 from rmab.compute_whittle import arm_value_iteration_exponential, fast_arm_compute_whittle, fast_arm_compute_whittle_multi_prob
-from rmab.utils import binary_to_decimal, custom_reward, one_hot, one_hot_fixed, custom_reward_contextual, get_average_context
+from rmab.utils import binary_to_decimal, custom_reward, one_hot, one_hot_fixed, custom_reward_contextual, get_average_context, avg_reward_contextual
 
 from copy import deepcopy
 import random 
@@ -103,7 +103,11 @@ def shapley_index_custom(env,state,memoizer_shapley = {}):
     scores = []
     for i in range(num_random_combos):
         combo = combinations[i]
-        scores.append(custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters))
+
+        if env.use_context:
+            scores.append(avg_reward_contextual(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters))
+        else:
+            scores.append(custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters))
     scores = np.array(scores)
 
     num_by_shapley_index = np.zeros(len(state_1))
@@ -112,7 +116,11 @@ def shapley_index_custom(env,state,memoizer_shapley = {}):
         for i in range(len(state_1)):
             if combo[i] == 0:
                 action[i] = 1
-                shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
+
+                if env.use_context:
+                    shapley_indices[i] += avg_reward_contextual(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
+                else:
+                    shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
                 num_by_shapley_index[i] += 1
                 action[i] = 0
     shapley_indices /= num_by_shapley_index
@@ -156,7 +164,7 @@ def compute_regression(env):
     scores = []
     for i in range(num_random_combos):
         combo = combinations[i]
-        scores.append(custom_reward(state,combo,match_probabilities,env.reward_type,env.reward_parameters))
+        scores.append(avg_reward_contextual(state,combo,match_probabilities,env.reward_type,env.reward_parameters))
     scores = np.array(scores)
 
     X = combinations 
@@ -301,7 +309,11 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     if memory == None:
         memoizer = Memoizer('optimal')
-        match_probs = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
+
+        if env.use_context:
+            match_probs = [avg_reward_contextual(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
+        else:
+            match_probs = [custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))]
         print("Match probs {}".format(match_probs))
         for i in range(2):
             s = [i for _ in range(len(state))]

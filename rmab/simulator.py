@@ -1,7 +1,7 @@
 import gym
 import numpy as np
 from rmab.fr_dynamics import  get_food_rescue, get_food_rescue_top
-from rmab.utils import custom_reward
+from rmab.utils import custom_reward, custom_reward_contextual
 from rmab.baseline_policies import random_policy
 import random
 import torch 
@@ -40,7 +40,7 @@ class RMABSimulator(gym.Env):
     '''
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
-            discount,number_states=2,reward_style='state',match_probability_list = []):
+            discount,number_states=2,reward_style='state',match_probability_list = [],use_context=False):
         '''
         Initialization
         '''
@@ -62,10 +62,12 @@ class RMABSimulator(gym.Env):
         self.train_epochs = 0
         self.power = None # For the submodular runs 
         self.avg_reward = 5
+        self.use_context = use_context
         self.reward_type = "probability"
         self.reward_parameters = {}
         self.past_states = []
         self.past_actions = []
+        self.past_contexts = []
 
         self.match_probability_list = np.array(self.match_probability_list)
 
@@ -123,6 +125,7 @@ class RMABSimulator(gym.Env):
         # current state initialization
         self.timestep    = 0
         self.states      = self.first_init_states[self.instance_count, self.episode_count, :]  # np.copy??
+        self.context = np.random.random((3))/3
         return self.observe()
 
     def reset(self):
@@ -151,6 +154,7 @@ class RMABSimulator(gym.Env):
         # Current state initialization
         self.timestep    = 0
         self.states      = self.sample_initial_states(self.cohort_size)
+        self.context = np.random.random((3))/3
 
         return self.observe()
 
@@ -184,6 +188,7 @@ class RMABSimulator(gym.Env):
             reward = self.get_reward(action)
 
         self.past_states.append(deepcopy(self.states))
+        self.past_contexts.append(deepcopy(self.context))
         self.past_actions.append(deepcopy(action))
 
         next_states = np.zeros(self.cohort_size*self.volunteers_per_arm)
@@ -217,6 +222,7 @@ class RMABSimulator(gym.Env):
                         next_states[i] = next_state 
 
         self.states = next_states.astype(int)
+        self.context = np.random.random((3))/3
 
         self.timestep += 1
 
@@ -245,6 +251,8 @@ class RMABSimulator(gym.Env):
         elif self.reward_style == 'custom': 
             if action is None:
                 return 0
+            elif self.use_context:
+                return custom_reward_contextual(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type,self.reward_parameters,self.context)
             else:
                 return custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type,self.reward_parameters)
 
@@ -583,7 +591,7 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
     
     return all_transitions, probs_by_partition
 
-def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,volunteers_per_arm):
+def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,volunteers_per_arm,use_context):
     """Create the m_{i} or Y_{i} values for a given reward function
 
     Arguments:  
@@ -600,7 +608,7 @@ def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,
     
     Returns: List of floats/sets, either m_{i} or Y_{i}(s_{i})"""
 
-    if reward_type == "set_cover":
+    if reward_type == "set_cover" or reward_type == 'set_cover_random':
         if prob_distro == "fixed":
             match_probabilities = []
             set_sizes = [int(reward_parameters['arm_set_low']) for i in range(N)]
@@ -621,6 +629,8 @@ def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,
                 match_probabilities.append(temp_set)
     elif prob_distro == "food_rescue" or prob_distro == "food_rescue_top":
         match_probabilities = [np.random.choice(probs_by_partition[i//volunteers_per_arm]) for i in range(N)] 
+    elif reward_type == "probability_context":
+        match_probabilities = [[np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for j in range(3)] for i in range(N)]
     else:
         match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
     return match_probabilities
@@ -647,6 +657,7 @@ def create_environment(parameters,max_transition_prob=0.25):
     n_epochs = parameters['n_epochs']
     n_episodes = parameters['n_episodes']
     budget = parameters['budget']
+    use_context = parameters['use_context']
 
     all_transitions,probs_by_partition = create_transitions_from_prob(prob_distro,seed,max_transition_prob=max_transition_prob)
     all_population_size = len(all_transitions)
@@ -660,7 +671,7 @@ def create_environment(parameters,max_transition_prob=0.25):
 
     if "global_transition" not in prob_distro:
         match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,
-                                            parameters['volunteers_per_arm'])
+                                            parameters['volunteers_per_arm'],use_context)
     else:
         match_probabilities = all_transitions[:,1,1,2]
 
@@ -669,7 +680,7 @@ def create_environment(parameters,max_transition_prob=0.25):
     else:
         n_states = 2
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
-                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='custom',match_probability_list=match_probabilities)
+                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='custom',match_probability_list=match_probabilities,use_context=use_context)
 
     if parameters['prob_distro'] == "one_time":
         N = parameters['n_arms']*parameters['volunteers_per_arm']
@@ -738,7 +749,7 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
         simulator.shapley_iterations = shapley_iterations  
 
         policy_results = run_heterogenous_policy(simulator, parameters['n_episodes'], parameters['n_epochs'], parameters['discount'],policy,seed,lamb=parameters['lamb'],should_train=should_train,test_T=test_length,get_memory=should_train,per_epoch_function=per_epoch_function)
-        if parameters['reward_type'] == "set_cover" and parameters['n_arms'] <= 10:
+        if (parameters['reward_type'] == "set_cover" or parameters['reward_type'] == 'set_cover_random') and parameters['n_arms'] <= 10:
             match_probs = simulator.match_probability_list[simulator.agent_idx]
 
             best_overall = 0.01
