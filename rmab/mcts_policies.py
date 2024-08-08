@@ -4,8 +4,8 @@ import random
 from rmab.utils import Memoizer
 from rmab.whittle_policies import whittle_index, shapley_index_custom
 from rmab.baseline_policies import random_policy
-from rmab.utils import custom_reward, one_hot
-from rmab.compute_whittle import get_multi_Q
+from rmab.utils import custom_reward, one_hot, contextual_custom_reward
+from rmab.compute_whittle import get_multi_Q, Q_multi_prob, fast_compute_whittle_indices
 
 import time
 
@@ -19,8 +19,8 @@ def get_reward_max(state,action,match_probs,lamb):
     score = np.max(prod_state)
     return score*(1-lamb) + np.sum(state)/len(state)*lamb
 
-def get_reward_custom(state,action,match_probs,lamb,reward_type,reward_parameters):
-    return custom_reward(state,action,match_probs,reward_type,reward_parameters)*(1-lamb) + np.sum(state)/len(state)*lamb
+def get_reward_custom(state,action,match_probs,lamb,reward_type,reward_parameters,context):
+    return contextual_custom_reward(state,action,match_probs,reward_type,reward_parameters,context)*(1-lamb) + np.sum(state)/len(state)*lamb
 
 class MonteCarloTreeSearchNode():
     """Class which allows for MCTS to run
@@ -211,7 +211,7 @@ class StateAction():
     """Class which abstracts out the game specifics
     Covers the reward and updates the arms pulled so far"""
 
-    def __init__(self,budget,discount,lamb,initial_state,volunteers_per_arm,n_arms,match_probs,max_rollout_actions,env,shapley=False,use_raw_reward=False):
+    def __init__(self,budget,discount,lamb,initial_state,volunteers_per_arm,n_arms,match_probs,max_rollout_actions,env,shapley=False,use_raw_reward=False,p_matrix=None):
         self.budget = budget 
         self.discount = discount 
         self.lamb = lamb  
@@ -227,6 +227,7 @@ class StateAction():
         self.attribution_method = "proportional"
         self.use_raw_reward = use_raw_reward
         self.whittle_index = []
+        self.p_matrix = p_matrix
 
     def get_legal_actions(self):
         """Find all the arms pulled, and make sure no duplicate arms are pulled
@@ -260,7 +261,7 @@ class StateAction():
             Use this to compute the Whittle Index"""
 
         last_state = []
-        memory_shapley = self.memory[1]
+        p_matrix = self.memory[1]
 
         # Compute the State, Arms Played, and immideate marginal rewards
         state_choices = self.previous_state_actions
@@ -274,10 +275,13 @@ class StateAction():
                 last_action.append(0)
         last_action = np.array(last_action)
 
-        last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters)
+        last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.context)
         last_reward -= np.sum(last_state)/len(last_state)*self.lamb 
-        arm_q = get_multi_Q(last_state,last_action,self.env,self.lamb,memory_shapley,[0 for i in range(len(last_action))])
 
+        arm_q = 0
+
+        for i in range(len(last_state)):
+            arm_q += self.memory[0][i][last_state[i]][last_action[i]]
 
         if self.use_raw_reward:
             total_reward = 0
@@ -292,7 +296,9 @@ class StateAction():
                     else:
                         action_0_1.append(0)
                 action_0_1 = np.array(action_0_1)
-                total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters)
+
+                # TODO: Make this an option whether or not we select contextually 
+                total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.context)
             return last_action, total_reward 
         
         return last_action, last_reward + arm_q         
@@ -308,7 +314,7 @@ class StateAction():
 
         previous_state_actions = initial_state.previous_state_actions + [(initial_state.current_state,action)]
 
-        new_state_object = StateAction(initial_state.budget,initial_state.discount,initial_state.lamb,initial_state.current_state,initial_state.volunteers_per_arm,initial_state.n_arms,initial_state.match_probs,initial_state.max_rollout_actions,initial_state.env)
+        new_state_object = StateAction(initial_state.budget,initial_state.discount,initial_state.lamb,initial_state.current_state,initial_state.volunteers_per_arm,initial_state.n_arms,initial_state.match_probs,initial_state.max_rollout_actions,initial_state.env,p_matrix=initial_state.p_matrix)
         new_state_object.use_raw_reward = initial_state.use_raw_reward
         new_state_object.attribution_method = initial_state.attribution_method
         new_state_object.previous_state_actions = previous_state_actions
@@ -390,23 +396,49 @@ def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setu
     Returns: 0-1 list of arms to pull"""
     
     N = len(state)
+    n_states = env.transitions.shape[1] 
     rollout = budget
-    match_probs = np.array(env.match_probability_list)[env.agent_idx]
     state_actions = []
 
     if memory == None:
-        memory = Memoizer('optimal'),np.array([custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))])
+        memoizer = Memoizer('optimal')
+        p_matrix = np.zeros((N,n_states))
 
-        for i in range(2):
-            s = [i for _ in range(len(state))]
-            whittle_index(env,s,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1])
+        for i in range(N):
+            for s in range(n_states):
+                default_state = [env.worst_state for _ in range(N)]
+                default_state[i] = s
+                p_matrix[i,s] = custom_reward(default_state,one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)
 
-    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env,shapley=False)
+        Q_multi_prob_list = np.zeros((N,n_states,2))
+
+        for i in range(N):
+            for s in range(n_states):
+                Q_multi_prob_list[i][s] = Q_multi_prob(env.transitions[i//env.volunteers_per_arm], s, 0,env.discount,lamb=lamb,
+                match_prob=0,match_prob_now=0,num_arms=len(state),active_states=env.active_states,
+                p_matrix=p_matrix[i])[-1]
+
+        reward_matrix = np.zeros((N,n_states,2))
+
+        for i in range(N):
+            for j in range(n_states):
+                if j in env.active_states:
+                    reward_matrix[i,j] += lamb/N
+                reward_matrix[i,j,1] += (1-lamb)*p_matrix[i,j]
+
+        whittle_matrix = np.zeros((N,n_states))
+        for i in range(N):
+            for j in range(n_states):
+                whittle_matrix[i] = fast_compute_whittle_indices(env.transitions[i//env.volunteers_per_arm],reward_matrix[i],env.discount)
+    else:
+        Q_multi_prob_list, p_matrix, whittle_matrix = memory 
+
+    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,env.match_probability_list[env.agent_idx],rollout,env,shapley=False,p_matrix=p_matrix)
     s.attribution_method = attribution_method 
     s.previous_state_actions = state_actions
-    s.memory = memory 
+    s.memory = (Q_multi_prob_list,p_matrix) 
     s.per_epoch_results = per_epoch_results
-    s.whittle_index = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1])
+    s.whittle_index = [whittle_matrix[i][state[i]] for i in range(N)]
     root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,time_limit=env.time_limit,use_whittle=True)
     selected_idx = root.best_action(budget)
     memory = s.memory 
@@ -414,7 +446,7 @@ def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setu
     action[selected_idx] = 1
 
     
-    return action, memory
+    return action, (Q_multi_prob_list, p_matrix,whittle_matrix)
 
 def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
     """Leverage Shapley values + MCTS to compute indices + rollout 
@@ -433,26 +465,54 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
     Returns: 0-1 list of arms to pull"""
     
     N = len(state)
+    n_states = env.transitions.shape[1] 
     rollout = budget
-    match_probs = np.array(env.match_probability_list)[env.agent_idx]
     state_actions = []
 
     if memory == None:
-        memory = Memoizer('optimal'),np.array(shapley_index_custom(env,np.ones(len(env.agent_idx)),{})[0])
+        u_matrix = np.zeros((N,n_states))
 
-        for i in range(2):
-            s = [i for _ in range(len(state))]
-            whittle_index(env,s,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1])
+        for s in range(n_states):
+            for i in range(N):
+                curr_state = [env.best_state for _ in range(N)]
+                curr_state[i] = s
+                u_matrix[i,s] = shapley_index_custom(env,curr_state,{},idx=i)
 
-    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env,shapley=True)
+        Q_multi_prob_list = np.zeros((N,n_states,2))
+
+        for i in range(N):
+            for s in range(n_states):
+                Q_multi_prob_list[i][s] = Q_multi_prob(env.transitions[i//env.volunteers_per_arm], s, 0,env.discount,lamb=lamb,
+                match_prob=0,match_prob_now=0,num_arms=len(state),active_states=env.active_states,
+                p_matrix=u_matrix[i])[-1]
+
+        reward_matrix = np.zeros((N,n_states,2))
+
+        for i in range(N):
+            for j in range(n_states):
+                if j in env.active_states:
+                    reward_matrix[i,j] += lamb/N
+                reward_matrix[i,j,1] += (1-lamb)*u_matrix[i,j]
+
+        whittle_matrix = np.zeros((N,n_states))
+        for i in range(N):
+            for j in range(n_states):
+                whittle_matrix[i] = fast_compute_whittle_indices(env.transitions[i//env.volunteers_per_arm],reward_matrix[i],env.discount)
+
+    else:
+        Q_multi_prob_list, u_matrix, whittle_matrix = memory 
+
+    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,env.match_probability_list[env.agent_idx],rollout,env,shapley=False,p_matrix=u_matrix)
     s.attribution_method = attribution_method 
     s.previous_state_actions = state_actions
-    s.memory = memory 
+    s.memory = (Q_multi_prob_list,u_matrix) 
     s.per_epoch_results = per_epoch_results
-    s.whittle_index = whittle_index(env,state,budget,lamb,memory[0],reward_function="combined",match_probs=memory[1])
+    s.whittle_index = [whittle_matrix[i][state[i]] for i in range(N)]
     root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,time_limit=env.time_limit,use_whittle=True)
     selected_idx = root.best_action(budget)
     memory = s.memory 
     action = np.zeros(N, dtype=np.int8)
-    action[selected_idx] = 1    
-    return action, memory
+    action[selected_idx] = 1
+
+    
+    return action, (Q_multi_prob_list, u_matrix,whittle_matrix)

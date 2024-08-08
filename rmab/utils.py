@@ -308,8 +308,26 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
     elif custom_reward_type == "max":
         probs = s*a*match_probabilities
         return np.max(probs) 
+    elif custom_reward_type == "min":
+        probs = s*a*match_probabilities
+
+        val_probs = [i for i in probs if i>0]
+
+        if len(val_probs) == 0:
+            return 0
+        else:
+            return np.min(val_probs) 
     elif custom_reward_type == "probability":
         probs = s*a*match_probabilities
+        return 1-np.prod(1-probs)
+    elif custom_reward_type == "probability_context":
+        probs = s*a*match_probabilities
+        return 1-np.prod(1-probs)
+    elif custom_reward_type == "probability_multi_state":
+        s = np.array(s) 
+        a = np.array(a) 
+        probs = s*a*match_probabilities
+        probs[s == 4] = 0
         return 1-np.prod(1-probs)
     elif custom_reward_type == "two_by_two":
         probs = s*a*match_probabilities
@@ -342,6 +360,29 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
         return np.sum(probs)
     else:
         raise Exception("Reward type {} not found".format(custom_reward_type))  
+
+def contextual_custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,context):
+    """Custom defined submodular reward which is maximized by
+        each policy
+    
+    Arguments:
+        s: Numpy array for the state of length N
+        a: Numpy array for the action of lenghth N
+        match_probabilities: Numpy array with information for each arm
+            Of length N
+            For example, for set cover, match_probabilities contains
+            The set corresponding to each arm
+    
+    Returns: Float, reward"""
+    if custom_reward_type == "probability_context":
+        c = context - 0.5 
+        match_probabilities += c/10
+        match_probabilities = np.clip(match_probabilities,0,1)
+        probs = s*a*match_probabilities
+        return 1-np.prod(1-probs)
+    else:
+        return custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters)
+
 
 def partition_volunteers(probs_by_num,num_by_section):
     """Given a list of volunteer probabilities, partition this

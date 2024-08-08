@@ -1,7 +1,7 @@
 import gym
 import numpy as np
-from rmab.fr_dynamics import  get_food_rescue, get_food_rescue_top
-from rmab.utils import custom_reward
+from rmab.fr_dynamics import  get_food_rescue, get_food_rescue_top, get_food_rescue_multi_state
+from rmab.utils import custom_reward, contextual_custom_reward
 from rmab.baseline_policies import random_policy
 import random
 import torch 
@@ -39,7 +39,8 @@ class RMABSimulator(gym.Env):
     '''
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
-            discount,number_states=2,reward_style='state',match_probability_list = []):
+            discount,number_states=2,reward_style='state',match_probability_list = [],initial_prob=[[0.5,0.5] for i in range(100)],
+            best_state=1,worst_state=0,active_states=[1]):
         '''
         Initialization
         '''
@@ -63,6 +64,10 @@ class RMABSimulator(gym.Env):
         self.avg_reward = 5
         self.reward_type = "probability"
         self.reward_parameters = {}
+        self.initial_prob = initial_prob
+        self.best_state = best_state
+        self.worst_state = worst_state
+        self.active_states = active_states
 
         self.match_probability_list = np.array(self.match_probability_list)
 
@@ -82,7 +87,7 @@ class RMABSimulator(gym.Env):
             self.cohort_selection[i, :] = np.random.choice(a=self.all_population, size=self.cohort_size, replace=False)
             print('cohort', self.cohort_selection[i, :])
             for ep in range(n_episodes):
-                self.first_init_states[i, ep, :] = self.sample_initial_states(self.cohort_size*self.volunteers_per_arm,prob=0.5)
+                self.first_init_states[i, ep, :] = np.concatenate([self.sample_initial_states(self.volunteers_per_arm,initial_prob=initial_prob[c]) for c in self.cohort_selection[i]])
 
     def reset_all(self):
         self.instance_count = -1
@@ -120,12 +125,16 @@ class RMABSimulator(gym.Env):
         # current state initialization
         self.timestep    = 0
         self.states      = self.first_init_states[self.instance_count, self.episode_count, :]  # np.copy??
+        self.context = np.random.random(len(self.agent_idx))
+
         return self.observe()
 
     def reset(self):
         self.timestep      = 0
         self.episode_count += 1
         self.states        = self.first_init_states[self.instance_count, self.episode_count, :]
+        self.context = np.random.random(len(self.agent_idx))
+
         print(f'instance {self.instance_count}, ep {self.episode_count}')
 
         return self.observe()
@@ -148,17 +157,18 @@ class RMABSimulator(gym.Env):
         # Current state initialization
         self.timestep    = 0
         self.states      = self.sample_initial_states(self.cohort_size)
+        self.context = np.random.random(len(self.agent_idx))
 
         return self.observe()
 
-    def sample_initial_states(self, cohort_size, prob=0.5):
+    def sample_initial_states(self, cohort_size, initial_prob=[0.5,0.5]):
         '''
         Sampling initial states at random.
         Input:
             cohort_size: the number of arms to be initialized
             prob: the probability of sampling 0 (not engaging state)
         '''
-        states = np.random.choice(a=self.number_states, size=cohort_size, p=[prob, 1-prob])
+        states = np.random.choice(a=self.number_states, size=cohort_size, p=initial_prob)
         return states
 
     def is_terminal(self):
@@ -189,6 +199,7 @@ class RMABSimulator(gym.Env):
 
         self.states = next_states.astype(int)
         self.timestep += 1
+        self.context = np.random.random(len(self.agent_idx))
 
         done = self.is_terminal()
 
@@ -216,7 +227,7 @@ class RMABSimulator(gym.Env):
             if action is None:
                 return 0
             else:
-                return custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type,self.reward_parameters)
+                return contextual_custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type,self.reward_parameters,self.context)
 
 def assert_valid_transition(transitions):
     """Determine if a set of transitions is valid;
@@ -233,23 +244,25 @@ def assert_valid_transition(transitions):
 
     bad = False
     N, n_states, n_actions, _ = transitions.shape
-    for i in range(N):
-        for s in range(n_states):
-            # ensure acting is always good
-            if transitions[i,s,1,1] < transitions[i,s,0,1]:
-                bad = True
-                print(f'acting should always be good! {i,s} {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}')
 
-            # assert transitions[i,s,1,1] >= transitions[i,s,0,1] + 1e-6, f'acting should always be good! {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}'
+    if n_states == 2:
+        for i in range(N):
+            for s in range(n_states):
+                # ensure acting is always good
+                if transitions[i,s,1,1] < transitions[i,s,0,1]:
+                    bad = True
+                    print(f'acting should always be good! {i,s} {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}')
 
-    for i in range(N):
-        for a in range(n_actions):
-            # ensure start state is always good
-            # assert transitions[i,1,a,1] >= transitions[i,0,a,1] + 1e-6, f'good start state should always be good! {transitions[i,1,a,1]:.3f} < {transitions[i,0,a,1]:.3f}'
-            if transitions[i,1,a,1] < transitions[i,0,a,1]:
-                bad = True
-                print(f'good start state should always be good! {transitions[i,1,a,1]:.3f} < {transitions[i,0,a,1]:.3f}')
-    # assert bad != True
+                # assert transitions[i,s,1,1] >= transitions[i,s,0,1] + 1e-6, f'acting should always be good! {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}'
+
+        for i in range(N):
+            for a in range(n_actions):
+                # ensure start state is always good
+                # assert transitions[i,1,a,1] >= transitions[i,0,a,1] + 1e-6, f'good start state should always be good! {transitions[i,1,a,1]:.3f} < {transitions[i,0,a,1]:.3f}'
+                if transitions[i,1,a,1] < transitions[i,0,a,1]:
+                    bad = True
+                    print(f'good start state should always be good! {transitions[i,1,a,1]:.3f} < {transitions[i,0,a,1]:.3f}')
+        # assert bad != True
 
 def create_random_transitions(num_transitions,max_prob,min_transition_prob=0):
     """Create a matrix with a set of random transitions for N agents
@@ -337,13 +350,16 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
             state = env.observe()
             if t>=T-test_T:
                 env.is_training = False
-                all_active_rate[epoch,t-(T-test_T)] = np.sum(state)/len(state)
+
+                if env.reward_type != "probability_multi_state":
+                    all_active_rate[epoch,t-(T-test_T)] = np.sum(state)/len(state)
+                else:
+                    all_active_rate[epoch,t-(T-test_T)] = len(np.where((state != 0) & (state != 4))[0])/len(state)
 
             if should_train or t >=T-test_T:
                 action,memory = policy(env,state,budget,lamb,memory,per_epoch_results)
             else:
                 action,memory = random_policy(env,state,budget,lamb,memory,per_epoch_results)
-            
             next_state, reward, done, _ = env.step(action)
 
             if done and t+1 < T: env.reset()
@@ -363,7 +379,6 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
         inference_time_taken += time.time()-start 
     env.time_taken = inference_time_taken
     env.train_time = train_time_taken
-
 
     print("Took {} time for inference and {} time for training".format(inference_time_taken,train_time_taken))
 
@@ -410,12 +425,35 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
 
     np.random.seed(seed)
     probs_by_partition = []
+    n_states = 2
+    initial_prob = np.array([[0.5,0.5] for i in range(100)])
+    best_state = 1
+    worst_state = 0
+    active_states = [1]
+
     if prob_distro == "uniform" or prob_distro == "linearity":
         all_population_size = 100 
         all_transitions = create_random_transitions(all_population_size,max_transition_prob)
     elif prob_distro == "food_rescue":
         all_population_size = 100 
-        all_transitions, probs_by_partition = get_food_rescue(all_population_size)
+        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
+    elif prob_distro == "food_rescue_context":
+        all_population_size = 100 
+        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
+    elif prob_distro == "food_rescue_match":
+        all_population_size = 100 
+        all_transitions, probs_by_partition = get_food_rescue(all_population_size,match=True)
+        n_states = all_transitions.shape[1]
+        initial_prob = [0 for i in range(n_states)]
+        initial_prob[0] = 0.5
+        initial_prob[1] = 0.5
+    elif prob_distro == "food_rescue_multi_state":
+        all_population_size = 100 
+        n_states = 5
+        all_transitions, probs_by_partition, initial_prob = get_food_rescue_multi_state(all_population_size)
+        best_state = 3
+        worst_state = 4
+        active_states = [1,2,3]
     elif prob_distro == "food_rescue_top":
         all_population_size = 20 
         all_transitions, probs_by_partition = get_food_rescue_top(all_population_size)
@@ -432,7 +470,7 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
     else:
         raise Exception("Probability distribution {} not found".format(prob_distro))
     
-    return all_transitions, probs_by_partition
+    return all_transitions, probs_by_partition, n_states, initial_prob, best_state, worst_state, active_states
 
 def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,volunteers_per_arm):
     """Create the m_{i} or Y_{i} values for a given reward function
@@ -470,7 +508,7 @@ def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,
                 while len(temp_set) < set_sizes[i]:
                     temp_set.add(np.random.randint(0,reward_parameters['universe_size']))
                 match_probabilities.append(temp_set)
-    elif prob_distro == "food_rescue" or prob_distro == "food_rescue_top":
+    elif "food_rescue" in prob_distro:
         match_probabilities = [np.random.choice(probs_by_partition[i//volunteers_per_arm]) for i in range(N)] 
     else:
         match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
@@ -499,7 +537,7 @@ def create_environment(parameters,max_transition_prob=0.25):
     n_episodes = parameters['n_episodes']
     budget = parameters['budget']
 
-    all_transitions,probs_by_partition = create_transitions_from_prob(prob_distro,seed,max_transition_prob=max_transition_prob)
+    all_transitions,probs_by_partition, n_states,initial_prob, best_state, worst_state,active_states = create_transitions_from_prob(prob_distro,seed,max_transition_prob=max_transition_prob)
     all_population_size = len(all_transitions)
 
     random.seed(seed)
@@ -512,7 +550,8 @@ def create_environment(parameters,max_transition_prob=0.25):
                                         parameters['volunteers_per_arm'])
 
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
-                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=2, reward_style='custom',match_probability_list=match_probabilities)
+                n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='custom',match_probability_list=match_probabilities,
+                initial_prob=initial_prob,best_state=best_state,worst_state=worst_state,active_states=active_states)
 
     if parameters['prob_distro'] == "one_time":
         N = parameters['n_arms']*parameters['volunteers_per_arm']
