@@ -72,11 +72,12 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
         for i in range(N):
             for j in range(n_states):
                 whittle_matrix[i] = fast_compute_whittle_indices(env.transitions[i//env.volunteers_per_arm],reward_matrix[i],env.discount)
+    
     else:
         whittle_matrix = memory 
     
+    
     state_WI = [whittle_matrix[i][state[i]] for i in range(N)]
-
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
     action[sorted_WI[:budget]] = 1
@@ -257,12 +258,29 @@ def contextual_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
     N = len(state) 
     n_states = env.transitions.shape[1]
 
-    if memory is None:    
+    if memory == None:
         # Construct transitions of size |S|*|D|, where we get |D| samples
         num_samples = 10
+
         random_contexts = np.array([[random.random() for i in range(len(state))] for _ in range(num_samples)])
         new_reward_matrix = np.zeros((N,num_samples*n_states+1,2))
         transitions = np.zeros((N,num_samples*n_states+1,2,num_samples*n_states+1))
+
+        context_shapley_values = np.zeros((N,num_samples*n_states+1))
+
+        for i in range(N):
+            for j in range(n_states):
+                for k in range(num_samples):
+                    idx = j*num_samples + k 
+                    default_state = [env.worst_state for _ in range(N)]
+                    default_state[i] = j
+                    context = random_contexts[k]
+                    res = contextual_custom_reward(default_state,one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,context)
+                    context_shapley_values[i,idx] = res
+        
+            default_state = [env.worst_state for _ in range(N)]
+            default_state[i] = state[i]
+            context_shapley_values[i,-1] = contextual_custom_reward(default_state,one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.context)
 
         for i in range(N):
             for j in range(n_states):
@@ -272,45 +290,46 @@ def contextual_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
                         new_reward_matrix[i,idx] += lamb/N
                     default_state = [env.worst_state for _ in range(N)]
                     default_state[i] = j
-                    new_reward_matrix[i,idx,1] += (1-lamb)*contextual_custom_reward(default_state,one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,random_contexts[k])
+                    new_reward_matrix[i,idx,1] += (1-lamb)*context_shapley_values[i,j*num_samples+k]
                     transitions[i][idx][:,:-1] = np.repeat(env.transitions[i][j], num_samples,axis=1)
                     transitions[i][idx] /= num_samples 
 
             if state[i] in env.active_states:
                 new_reward_matrix[i,-1] += lamb/N
-    
+
             transitions[i][-1] = transitions[i][state[i]*num_samples]
-
-        baseline_whittles = np.zeros((N,n_states))
-        for i in range(N):
-            for s in range(n_states):
-                transitions[i][-1] = transitions[i][s*num_samples]
-                baseline_whittles[i][s] = fast_compute_whittle_indices(transitions[i],new_reward_matrix[i],env.discount)[-1]
-
-        scale_whittles = np.zeros((N,n_states))
-        for i in range(N):
-            for s in range(n_states):
-                transitions[i][-1] = transitions[i][s*num_samples]
-                new_reward_matrix[i,-1,1] += 1
-                scale_whittles[i][s] = fast_compute_whittle_indices(transitions[i],new_reward_matrix[i],env.discount)[-1]
-                new_reward_matrix[i,-1,1] -= 1
+            new_reward_matrix[i,-1,1] += (1-lamb)*context_shapley_values[i,-1]
     else:
-        baseline_whittles,scale_whittles = memory 
-    
-    rewards = np.zeros(N)
+        new_reward_matrix, transitions = memory 
+        num_samples = 10
 
-    for i in range(N):
-        default_state = [env.worst_state for _ in range(N)]
-        default_state[i] = state[i]
-        rewards[i] = (1-lamb)*contextual_custom_reward(default_state,one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.context)
-    
-    state_WI = [baseline_whittles[i][state[i]]+scale_whittles[i][state[i]]*rewards[i] for i in range(N)]
+        contextual_shapley_values = []
+        for i in range(N):
+            default_state = [env.worst_state for _ in range(N)]
+            default_state[i] = state[i]
+            contextual_shapley_values.append(contextual_custom_reward(default_state,one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.context))
+
+        for i in range(N):
+            transitions[i][-1] = transitions[i][state[i]*num_samples]
+            new_reward_matrix[i,-1] = 0
+
+            if state[i] in env.active_states:
+                new_reward_matrix[i,-1] += lamb/N 
+            new_reward_matrix[i,-1,1] += (1-lamb)*contextual_shapley_values[i]
+
+    state_WI = []
+    for i in range(N):        
+        better_reward = deepcopy(new_reward_matrix[i])
+        state_WI_value = fast_compute_whittle_indices(transitions[i],better_reward,env.discount)
+
+
+        state_WI.append(state_WI_value[-1])
 
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
     action[sorted_WI[:budget]] = 1
 
-    return action, (baseline_whittles,scale_whittles)  
+    return action, (new_reward_matrix,transitions)  
 
 def contextual_shapley_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Whittle index policy based on computing the subsidy for each arm
@@ -333,6 +352,7 @@ def contextual_shapley_policy(env,state,budget,lamb,memory,per_epoch_results):
     if memory == None:
         # Construct transitions of size |S|*|D|, where we get |D| samples
         num_samples = 10
+
         random_contexts = np.array([[random.random() for i in range(len(state))] for _ in range(num_samples)])
         new_reward_matrix = np.zeros((N,num_samples*n_states+1,2))
         transitions = np.zeros((N,num_samples*n_states+1,2,num_samples*n_states+1))
@@ -391,11 +411,87 @@ def contextual_shapley_policy(env,state,budget,lamb,memory,per_epoch_results):
     state_WI = []
     for i in range(N):        
         better_reward = deepcopy(new_reward_matrix[i])
-        state_WI.append(fast_compute_whittle_indices(transitions[i],better_reward,env.discount)[-1])
+        state_WI_value = fast_compute_whittle_indices(transitions[i],better_reward,env.discount)
 
+
+        state_WI.append(state_WI_value[-1])
 
     sorted_WI = np.argsort(state_WI)[::-1]
     action = np.zeros(N, dtype=np.int8)
     action[sorted_WI[:budget]] = 1
 
-    return action, (new_reward_matrix,transitions)  
+    return action, (new_reward_matrix,transitions) 
+
+    # N = len(state) 
+    # n_states = env.transitions.shape[1]
+
+    # if memory == None:
+    #     # Construct transitions of size |S|*|D|, where we get |D| samples
+    #     num_samples = 10
+
+    #     random_contexts = np.array([[random.random() for i in range(len(state))] for _ in range(num_samples)])
+    #     new_reward_matrix = np.zeros((N,num_samples*n_states+1,2))
+    #     transitions = np.zeros((N,num_samples*n_states+1,2,num_samples*n_states+1))
+
+    #     context_shapley_values = np.zeros((N,num_samples*n_states+1))
+
+    #     for i in range(N):
+    #         for j in range(n_states):
+    #             for k in range(num_samples):
+    #                 idx = j*num_samples + k 
+    #                 default_state = [env.best_state for _ in range(N)]
+    #                 default_state[i] = j
+    #                 context = random_contexts[k]
+    #                 res = shapley_index_custom_contexts(env,default_state,context,idx=i)
+    #                 context_shapley_values[i,idx] = res
+        
+    #         default_state = [env.best_state for _ in range(N)]
+    #         default_state[i] = state[i]
+    #         context_shapley_values[i,-1] = shapley_index_custom_contexts(env,default_state,env.context,idx=i)
+
+    #     for i in range(N):
+    #         for j in range(n_states):
+    #             for k in range(num_samples):
+    #                 idx = j*num_samples + k 
+    #                 if j in env.active_states:
+    #                     new_reward_matrix[i,idx] += lamb/N
+    #                 default_state = [env.best_state for _ in range(N)]
+    #                 default_state[i] = j
+    #                 new_reward_matrix[i,idx,1] += (1-lamb)*context_shapley_values[i,j*num_samples+k]
+    #                 transitions[i][idx][:,:-1] = np.repeat(env.transitions[i][j], num_samples,axis=1)
+    #                 transitions[i][idx] /= num_samples 
+
+    #         if state[i] in env.active_states:
+    #             new_reward_matrix[i,-1] += lamb/N
+
+    #         transitions[i][-1] = transitions[i][state[i]*num_samples]
+    #         new_reward_matrix[i,-1,1] += (1-lamb)*context_shapley_values[i,-1]
+    # else:
+    #     new_reward_matrix, transitions = memory 
+    #     num_samples = 10
+
+    #     contextual_shapley_values = []
+    #     for i in range(N):
+    #         default_state = [env.best_state for _ in range(N)]
+    #         default_state[i] = state[i]
+    #         contextual_shapley_values.append(shapley_index_custom_contexts(env,default_state,env.context,idx=i))
+
+    #     for i in range(N):
+    #         transitions[i][-1] = transitions[i][state[i]*num_samples]
+    #         new_reward_matrix[i,-1] = 0
+
+    #         if state[i] in env.active_states:
+    #             new_reward_matrix[i,-1] += lamb/N 
+    #         new_reward_matrix[i,-1,1] += (1-lamb)*contextual_shapley_values[i]
+
+    # state_WI = []
+    # for i in range(N):        
+    #     better_reward = deepcopy(new_reward_matrix[i])
+    #     state_WI.append(fast_compute_whittle_indices(transitions[i],better_reward,env.discount)[-1])
+
+
+    # sorted_WI = np.argsort(state_WI)[::-1]
+    # action = np.zeros(N, dtype=np.int8)
+    # action[sorted_WI[:budget]] = 1
+
+    # return action, (new_reward_matrix,transitions)  

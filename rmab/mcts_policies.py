@@ -64,6 +64,8 @@ class MonteCarloTreeSearchNode():
             if self.use_max:
                 return np.max(list(self.results_children.values()))*self._number_of_visits
             else:
+                if self._number_of_visits == 0:
+                    return 0
                 return np.mean(self._results)*self._number_of_visits
 
     def n(self):
@@ -143,7 +145,7 @@ class MonteCarloTreeSearchNode():
         return len(self._untried_actions) == 0
 
     def best_child(self, c_param=5):
-        choices_weights = [(c.q() / c.n()) + c_param * np.sqrt((2 * np.log(self.n()) / c.n())) for c in self.children]
+        choices_weights = [(c.q() / c.n()) + c_param * np.sqrt((2 * np.log(self.n()) / c.n())) if c.n() > 0 else 0 for c in self.children]
         return self.children[np.argmax(choices_weights)]
 
     def rollout_policy(self, possible_moves):  
@@ -278,10 +280,6 @@ class StateAction():
         last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.context)
         last_reward -= np.sum(last_state)/len(last_state)*self.lamb 
 
-        arm_q = 0
-
-        for i in range(len(last_state)):
-            arm_q += self.memory[0][i][last_state[i]][last_action[i]]
 
         if self.use_raw_reward:
             total_reward = 0
@@ -300,7 +298,11 @@ class StateAction():
                 # TODO: Make this an option whether or not we select contextually 
                 total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.context)
             return last_action, total_reward 
-        
+        arm_q = 0
+
+        for i in range(len(last_state)):
+            arm_q += self.memory[0][i][last_state[i]][last_action[i]]
+
         return last_action, last_reward + arm_q         
     
     def move(initial_state,action):

@@ -380,7 +380,7 @@ def contextual_custom_reward(s,a,match_probabilities,custom_reward_type,reward_p
     Returns: Float, reward"""
     if custom_reward_type == "probability_context":
         c = context - 0.5 
-        new_match_probabilities = match_probabilities + c/10
+        new_match_probabilities = match_probabilities + c/2
         new_match_probabilities = np.clip(new_match_probabilities,0,1)
         probs = s*a*new_match_probabilities
         return 1-np.prod(1-probs)
@@ -496,11 +496,12 @@ def shapley_index_custom(env,state,memoizer_shapley = {},idx=-1):
                     shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
                     num_by_shapley_index[i] += 1
                     action[i] = 0
+    
+    if idx != -1:
+        return shapley_indices[i]/num_by_shapley_index[i]
     shapley_indices /= num_by_shapley_index
     memoizer_shapley[state_str] = shapley_indices
 
-    if idx != -1:
-        return shapley_indices[i]
     return shapley_indices, memoizer_shapley
 
 def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1):
@@ -563,11 +564,11 @@ def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1
                     shapley_indices[i] += contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,context) - scores[j]
                     num_by_shapley_index[i] += 1
                     action[i] = 0
-    shapley_indices /= num_by_shapley_index
-    memoizer_shapley[state_str] = shapley_indices
 
     if idx != -1:
-        return shapley_indices[i]
+        return shapley_indices[i]/num_by_shapley_index[i]
+    shapley_indices /= num_by_shapley_index
+    memoizer_shapley[state_str] = shapley_indices
 
     return shapley_indices, memoizer_shapley
 
@@ -641,10 +642,12 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled,context):
                 action[i] = 0
         if time.time()-start > env.time_limit:
             break 
-    shapley_indices = shapley_indices / num_by_shapley_index
-    shapley_indices = np.nan_to_num(shapley_indices,0)
-    shapley_indices[shapley_indices == np.inf] = 0
-
+    
+    for i in range(len(shapley_indices)):
+        if num_by_shapley_index[i] > 0:
+            shapley_indices[i] /= num_by_shapley_index[i] 
+        else:
+            shapley_indices[i] = 0
     memoizer_shapley[state_str] = shapley_indices
 
     return shapley_indices, memoizer_shapley
