@@ -2,8 +2,8 @@ import numpy as np
 import random 
 
 from rmab.utils import Memoizer
-from rmab.whittle_policies import whittle_index, shapley_index_custom
-from rmab.baseline_policies import random_policy
+from rmab.whittle_policies import shapley_index_custom
+from rmab.baseline_policies import random_policy, compute_p_matrix, compute_reward_matrix
 from rmab.utils import custom_reward, one_hot, contextual_custom_reward
 from rmab.compute_whittle import get_multi_Q, Q_multi_prob, fast_compute_whittle_indices
 
@@ -378,6 +378,23 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
 
     return action, memory 
 
+def run_mcts(env,Q_multi_prob_list, p_matrix,whittle_matrix,budget,state,lamb):
+    """Boilerplate for running the MCTS method"""
+    
+    N = len(state)
+    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,env.match_probability_list[env.agent_idx],budget,env,shapley=False,p_matrix=p_matrix)
+    s.attribution_method = "proportional" 
+    s.previous_state_actions = []
+    s.memory = (Q_multi_prob_list,p_matrix) 
+    s.per_epoch_results = None
+    s.whittle_index = [whittle_matrix[i][state[i]] for i in range(N)]
+    root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,time_limit=env.time_limit,use_whittle=True)
+    selected_idx = root.best_action(budget)
+    action = np.zeros(N, dtype=np.int8)
+    action[selected_idx] = 1
+
+    return action, (Q_multi_prob_list, p_matrix,whittle_matrix)
+
 
 def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
     """Leverage Shapley values + MCTS to compute indices 
@@ -397,18 +414,9 @@ def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setu
     
     N = len(state)
     n_states = env.transitions.shape[1] 
-    rollout = budget
-    state_actions = []
 
     if memory == None:
-        memoizer = Memoizer('optimal')
-        p_matrix = np.zeros((N,n_states))
-
-        for i in range(N):
-            for s in range(n_states):
-                default_state = [env.worst_state for _ in range(N)]
-                default_state[i] = s
-                p_matrix[i,s] = custom_reward(default_state,one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)
+        p_matrix = compute_p_matrix(env,N) 
 
         Q_multi_prob_list = np.zeros((N,n_states,2))
 
@@ -418,13 +426,8 @@ def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setu
                 match_prob=0,match_prob_now=0,num_arms=len(state),active_states=env.active_states,
                 p_matrix=p_matrix[i])[-1]
 
-        reward_matrix = np.zeros((N,n_states,2))
-
-        for i in range(N):
-            for j in range(n_states):
-                if j in env.active_states:
-                    reward_matrix[i,j] += lamb/N
-                reward_matrix[i,j,1] += (1-lamb)*p_matrix[i,j]
+        reward_matrix = compute_reward_matrix(env,N,lamb)
+        reward_matrix[:,:,1] += (1-lamb)*p_matrix
 
         whittle_matrix = np.zeros((N,n_states))
         for i in range(N):
@@ -433,20 +436,7 @@ def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setu
     else:
         Q_multi_prob_list, p_matrix, whittle_matrix = memory 
 
-    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,env.match_probability_list[env.agent_idx],rollout,env,shapley=False,p_matrix=p_matrix)
-    s.attribution_method = attribution_method 
-    s.previous_state_actions = state_actions
-    s.memory = (Q_multi_prob_list,p_matrix) 
-    s.per_epoch_results = per_epoch_results
-    s.whittle_index = [whittle_matrix[i][state[i]] for i in range(N)]
-    root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,time_limit=env.time_limit,use_whittle=True)
-    selected_idx = root.best_action(budget)
-    memory = s.memory 
-    action = np.zeros(N, dtype=np.int8)
-    action[selected_idx] = 1
-
-    
-    return action, (Q_multi_prob_list, p_matrix,whittle_matrix)
+    return run_mcts(env,Q_multi_prob_list,p_matrix,whittle_matrix,budget,state,lamb)
 
 def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
     """Leverage Shapley values + MCTS to compute indices + rollout 
@@ -502,17 +492,4 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
     else:
         Q_multi_prob_list, u_matrix, whittle_matrix = memory 
 
-    s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,env.match_probability_list[env.agent_idx],rollout,env,shapley=False,p_matrix=u_matrix)
-    s.attribution_method = attribution_method 
-    s.previous_state_actions = state_actions
-    s.memory = (Q_multi_prob_list,u_matrix) 
-    s.per_epoch_results = per_epoch_results
-    s.whittle_index = [whittle_matrix[i][state[i]] for i in range(N)]
-    root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,time_limit=env.time_limit,use_whittle=True)
-    selected_idx = root.best_action(budget)
-    memory = s.memory 
-    action = np.zeros(N, dtype=np.int8)
-    action[selected_idx] = 1
-
-    
-    return action, (Q_multi_prob_list, u_matrix,whittle_matrix)
+    return run_mcts(env,Q_multi_prob_list,u_matrix,whittle_matrix,budget,state,lamb)

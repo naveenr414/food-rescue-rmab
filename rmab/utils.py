@@ -9,6 +9,10 @@ import scipy.stats as st
 import math
 import torch
 import resource 
+import time
+from copy import deepcopy
+import scipy 
+import random 
 
 
 def get_stationary_distribution(P):
@@ -376,9 +380,9 @@ def contextual_custom_reward(s,a,match_probabilities,custom_reward_type,reward_p
     Returns: Float, reward"""
     if custom_reward_type == "probability_context":
         c = context - 0.5 
-        match_probabilities += c/10
-        match_probabilities = np.clip(match_probabilities,0,1)
-        probs = s*a*match_probabilities
+        new_match_probabilities = match_probabilities + c/10
+        new_match_probabilities = np.clip(new_match_probabilities,0,1)
+        probs = s*a*new_match_probabilities
         return 1-np.prod(1-probs)
     else:
         return custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters)
@@ -430,3 +434,227 @@ def restrict_resources():
     torch.cuda.set_per_process_memory_fraction(0.5)
     torch.set_num_threads(1)
     resource.setrlimit(resource.RLIMIT_AS, (30 * 1024 * 1024 * 1024, -1))
+
+def shapley_index_custom(env,state,memoizer_shapley = {},idx=-1):
+    """Compute the Shapley index for matching; how much
+        does match probability increase when using some particular arm
+        u_{i}(s_{i})
+        
+    Arguments:
+        env: RMAB Simulator environment
+        state: Numpy array of 0-1 states for each volunteer, s_{i}
+        memoizer_shapley: Dictionary, to store previously computed Shapley indices
+        
+    Returns: Two things, shapley index, and updated dictionary"""
+
+    shapley_indices = [0 for i in range(len(state))]
+    state_str = "".join([str(i) for i in state])
+    if state_str in memoizer_shapley:
+        return memoizer_shapley[state_str], memoizer_shapley
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    corresponding_probabilities = match_probabilities
+    num_random_combos = env.shapley_iterations 
+
+    combinations = np.zeros((num_random_combos, len(corresponding_probabilities)), dtype=int)
+    budget = env.budget 
+    if len(corresponding_probabilities) <= env.budget-1:
+        if len(corresponding_probabilities) == 1:
+            return match_probabilities * state, memoizer_shapley
+        else: 
+            budget = 2
+    budget_probs = np.array([scipy.special.comb(len(corresponding_probabilities),k) for k in range(0,budget)])
+    budget_probs /= np.sum(budget_probs)
+
+    for i in range(num_random_combos):
+        k = random.choices(list(range(len(budget_probs))), weights=budget_probs,k=1)[0]
+        ones_indices = random.sample(list(range(len(corresponding_probabilities))),k)
+        combinations[i, ones_indices] = 1
+
+    state = [int(i) for i in state]
+    scores = []
+    for i in range(num_random_combos):
+        combo = combinations[i]
+        scores.append(custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters))
+
+    scores = np.array(scores)
+
+    num_by_shapley_index = np.zeros(len(state))
+    for j,combo in enumerate(combinations):
+        action = deepcopy(combo) 
+
+        if idx != -1:
+            i = idx 
+            if combo[i] == 0:
+                action[i] = 1
+                shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
+                num_by_shapley_index[i] += 1
+                action[i] = 0
+        else:
+            for i in range(len(state)):
+                if combo[i] == 0:
+                    action[i] = 1
+                    shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
+                    num_by_shapley_index[i] += 1
+                    action[i] = 0
+    shapley_indices /= num_by_shapley_index
+    memoizer_shapley[state_str] = shapley_indices
+
+    if idx != -1:
+        return shapley_indices[i]
+    return shapley_indices, memoizer_shapley
+
+def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1):
+    """Compute the Shapley index for matching; how much
+        does match probability increase when using some particular arm
+        u_{i}(s_{i})
+        
+    Arguments:
+        env: RMAB Simulator environment
+        state: Numpy array of 0-1 states for each volunteer, s_{i}
+        memoizer_shapley: Dictionary, to store previously computed Shapley indices
+        
+    Returns: Two things, shapley index, and updated dictionary"""
+
+    shapley_indices = [0 for i in range(len(state))]
+    state_str = "".join([str(i) for i in state])
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    corresponding_probabilities = match_probabilities
+    num_random_combos = env.shapley_iterations 
+
+    combinations = np.zeros((num_random_combos, len(corresponding_probabilities)), dtype=int)
+    budget = env.budget 
+    if len(corresponding_probabilities) <= env.budget-1:
+        if len(corresponding_probabilities) == 1:
+            return match_probabilities * state, memoizer_shapley
+        else: 
+            budget = 2
+    budget_probs = np.array([scipy.special.comb(len(corresponding_probabilities),k) for k in range(0,budget)])
+    budget_probs /= np.sum(budget_probs)
+
+    for i in range(num_random_combos):
+        k = random.choices(list(range(len(budget_probs))), weights=budget_probs,k=1)[0]
+        ones_indices = random.sample(list(range(len(corresponding_probabilities))),k)
+        combinations[i, ones_indices] = 1
+
+    state = [int(i) for i in state]
+    scores = []
+    for i in range(num_random_combos):
+        combo = combinations[i]
+        scores.append(contextual_custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,context))
+
+    scores = np.array(scores)
+
+    num_by_shapley_index = np.zeros(len(state))
+    for j,combo in enumerate(combinations):
+        action = deepcopy(combo) 
+
+        if idx != -1:
+            i = idx 
+            if combo[i] == 0:
+                action[i] = 1
+                new_reward = contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,context)
+                shapley_indices[i] += new_reward - scores[j]
+                num_by_shapley_index[i] += 1
+                action[i] = 0
+        else:
+            for i in range(len(state)):
+                if combo[i] == 0:
+                    action[i] = 1
+                    shapley_indices[i] += contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,context) - scores[j]
+                    num_by_shapley_index[i] += 1
+                    action[i] = 0
+    shapley_indices /= num_by_shapley_index
+    memoizer_shapley[state_str] = shapley_indices
+
+    if idx != -1:
+        return shapley_indices[i]
+
+    return shapley_indices, memoizer_shapley
+
+
+
+def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled,context):
+    """Compute the Shapley index for matching; how much
+        does match probability increase when using some particular arm
+        Assume that some arms were already pulled 
+        
+    Arguments:
+        env: RMAB Simulator environment
+        state: Numpy array of 0-1 states for each volunteer
+        memoizer_shapley: Dictionary, to store previously computed Shapley indices
+        arms_pulled: Which arms were already pulled 
+        
+    Returns: Two things, shapley index, and updated dictionary"""
+
+    shapley_indices = [0 for i in range(len(state))]
+    state_str = "".join([str(i) for i in state])
+
+    if state_str in memoizer_shapley:
+        return memoizer_shapley[state_str], memoizer_shapley
+
+    match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
+    corresponding_probabilities = match_probabilities
+    num_random_combos = env.shapley_iterations
+
+    combinations = np.zeros((num_random_combos, len(corresponding_probabilities)), dtype=int)
+
+    budget = env.budget-len(arms_pulled)
+
+    # Fix for when the number of combinations is small (with respect to the budget)
+    # In that scenario, we can essentially just manually compute
+    if len(corresponding_probabilities) <= env.budget-1:
+        if len(corresponding_probabilities) == 1:
+            return match_probabilities * state, memoizer_shapley
+        else: 
+            budget = 2
+
+    budget_probs = np.array([scipy.special.comb(len(corresponding_probabilities),k) for k in range(0,budget)])
+    budget_probs /= np.sum(budget_probs)
+
+    set_arms_pulled = set(arms_pulled)
+    arms_not_pulled = [i for i in range(len(state)) if i not in set_arms_pulled]
+
+    for i in range(num_random_combos):
+        k = random.choices(list(range(len(budget_probs))), weights=budget_probs,k=1)[0]
+        ones_indices = random.sample(arms_not_pulled,k)
+        combinations[i, ones_indices] = 1
+        combinations[i,arms_pulled] = 1
+
+    state = [int(i) for i in state]
+
+    num_by_shapley_index = np.zeros(len(state))
+    start = time.time() 
+    scores = []
+    for i in range(num_random_combos):
+        combo = combinations[i]
+        scores.append(contextual_custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,context))
+
+    scores = np.array(scores)
+
+    for j,combo in enumerate(combinations):
+        action = deepcopy(combo) 
+        for i in range(len(state)):
+            if combo[i] == 0:
+                action[i] = 1
+                shapley_indices[i] += contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,context) - scores[j]
+                num_by_shapley_index[i] += 1
+                action[i] = 0
+        if time.time()-start > env.time_limit:
+            break 
+    shapley_indices = shapley_indices / num_by_shapley_index
+    shapley_indices = np.nan_to_num(shapley_indices,0)
+    shapley_indices[shapley_indices == np.inf] = 0
+
+    memoizer_shapley[state_str] = shapley_indices
+
+    return shapley_indices, memoizer_shapley
+
+def compute_u_matrix(env,N,n_states):
+    u_matrix = np.zeros((N,n_states))
+
+    for s in range(n_states):
+        for i in range(N):
+            curr_state = [env.best_state for _ in range(N)]
+            curr_state[i] = s
+            u_matrix[i,s] = shapley_index_custom(env,curr_state,{},idx=i)
+    return u_matrix

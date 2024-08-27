@@ -442,7 +442,7 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
         all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
     elif prob_distro == "food_rescue_match":
         all_population_size = 100 
-        all_transitions, probs_by_partition = get_food_rescue(all_population_size,match=True)
+        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size,match=True)
         n_states = all_transitions.shape[1]
         initial_prob = [0 for i in range(n_states)]
         initial_prob[0] = 0.5
