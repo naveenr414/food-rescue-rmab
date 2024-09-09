@@ -10,6 +10,7 @@ from rmab.database import run_query, open_connection, close_connection
 from rmab.utils import haversine, binary_search_count
 import rmab.secret as secret 
 from rmab.utils import partition_volunteers
+from scipy.stats import poisson
 
 def get_transitions(data_by_user,num_rescues):
     """Get the transition probabilities for a given agent with a total of 
@@ -284,9 +285,6 @@ def get_food_rescue(all_population_size,match=False):
         prod = current_transitions*partition_scale[:,np.newaxis,np.newaxis,np.newaxis]
         new_transition = np.sum(prod,axis=0)
         all_transitions[i] = new_transition
-
-        print("All initial probs shape {}".format(all_initial_probs[i].shape))
-        print("Partition shape {}".format(partition_scale.shape))
 
         all_initial_probs[i] = np.sum(all_initial_probs[i]*partition_scale[:,np.newaxis],axis=0)
     all_transitions = np.array(all_transitions)
@@ -1053,7 +1051,7 @@ def get_match_probs(rescue,user_ids,rf_classifier,donation_id_to_latlon, recipie
             data_points.append(data_point)
     data_points = np.array(data_points)
     is_none= np.array(is_none)
-    ret = np.array(ret)
+    ret = np.array(ret,dtype=float)
     if len(data_points[is_none == False]) > 0:
         rf_probabilities = rf_classifier.predict_proba(data_points[is_none == False])[:,1]
         ret[is_none == False] = rf_probabilities
@@ -1094,3 +1092,321 @@ def get_match_probabilities(T,volunteers_per_group,groups,rf_classifier,rescues_
         features.append(current_feats)
 
     return np.array(match_probabilities), np.array(features) 
+
+def compute_two_step_transitions(quick=False):
+    db_name = secret.database_name 
+    username = secret.database_username 
+    password = secret.database_password 
+    ip_address = secret.ip_address
+    port = secret.database_port
+
+    connection_dict = open_connection(db_name,username,password,ip_address,port)
+    cursor = connection_dict['cursor']
+
+    data_by_user = get_data_all_users(cursor)
+
+    num_rescues_to_user_id = {}
+    for i in data_by_user:
+        if len(data_by_user[i]) not in num_rescues_to_user_id:
+            num_rescues_to_user_id[len(data_by_user[i])] = []
+        num_rescues_to_user_id[len(data_by_user[i])].append(i)
+
+    db_name = secret.database_name 
+    username = secret.database_username 
+    password = secret.database_password 
+    ip_address = secret.ip_address
+    port = secret.database_port
+    connection_dict = open_connection(db_name,username,password,ip_address,port)
+    cursor = connection_dict['cursor']
+
+    query = "SELECT * FROM RESCUES"
+    all_rescue_data = run_query(cursor,query)
+
+    query = ("SELECT * FROM ADDRESSES")
+    all_addresses = run_query(cursor,query)
+
+    address_id_to_latlon = {}
+    address_id_to_state = {}
+    for i in all_addresses:
+        address_id_to_state[i['id']] = i['state']
+        address_id_to_latlon[i['id']] = (i['latitude'],i['longitude'])
+
+    # Get user information
+    user_id_to_latlon = {}
+    user_id_to_state = {}
+    user_id_to_start = {}
+    user_id_to_end = {}
+
+    query = ("SELECT * FROM USERS")
+    user_data = run_query(cursor,query)
+    for user in user_data:
+        if user['address_id'] != None: 
+            user_id_to_latlon[user['id']] = address_id_to_latlon[user['address_id']]
+            user_id_to_state[user['id']] = address_id_to_state[user['address_id']]
+            user_id_to_start[user['id']] = user['created_at']
+            user_id_to_end[user['id']] = user['updated_at']
+
+    query = (
+        "SELECT * "
+        "FROM RESCUES "
+        "WHERE PUBLISHED_AT <= CURRENT_DATE "
+        "AND USER_ID IS NOT NULL "
+    )
+    all_user_published = run_query(cursor,query)
+
+    query = (
+        "SELECT * FROM donor_locations"
+    )
+    data = run_query(cursor,query)
+    donor_location_to_latlon = {}
+    for i in data:
+        donor_location_to_latlon[i['id']] = address_id_to_latlon[i['address_id']]
+
+    query = (
+        "SELECT * FROM donations"
+    )
+    donation_data = run_query(cursor,query)
+    donation_id_to_latlon = {}
+    for i in donation_data:
+        donation_id_to_latlon[i['id']] = donor_location_to_latlon[i['donor_location_id']]
+
+    query = (
+        "SELECT USER_ID, PUBLISHED_AT "
+        "FROM RESCUES "
+        "WHERE PUBLISHED_AT <= CURRENT_DATE "
+        "AND USER_ID IS NOT NULL "
+    )
+    all_user_published = run_query(cursor,query)
+    data_by_user = {}
+    for i in all_user_published:
+        user_id = i['user_id']
+        published_at = i['published_at']
+
+        if user_id not in data_by_user:
+            data_by_user[user_id] = []
+
+        data_by_user[user_id].append(published_at)
+
+    # Get rescue location info
+    num_rescues_to_user_id = {}
+    for i in data_by_user:
+        if len(data_by_user[i]) not in num_rescues_to_user_id:
+            num_rescues_to_user_id[len(data_by_user[i])] = []
+        num_rescues_to_user_id[len(data_by_user[i])].append(i)
+    rescue_to_latlon = {}
+    rescue_to_time = {}
+    for i in all_rescue_data:
+        if i['published_at'] != None and donation_id_to_latlon[i['donation_id']] != None and donation_id_to_latlon[i['donation_id']][0] != None:
+            rescue_to_latlon[i['id']] = donation_id_to_latlon[i['donation_id']]
+            rescue_to_latlon[i['id']] = (float(rescue_to_latlon[i['id']][0]),float(rescue_to_latlon[i['id']][1]))
+            rescue_to_time[i['id']] = i['published_at']
+
+    rescues_by_user = {}
+    for i in all_rescue_data:
+        if i['user_id'] not in rescues_by_user:
+            rescues_by_user[i['user_id']] = []
+        rescues_by_user[i['user_id']].append(i['created_at'])
+    for i in rescues_by_user:
+        rescues_by_user[i] = sorted(rescues_by_user[i])
+
+    def notifications(user_id):
+        """Compute the number of times a user was notified
+            Use the fact that all users within a 5 mile radius 
+            are notified 
+            
+        Arguments: 
+            user_id: Integer, the ID for the user
+            
+        Returns: Integer, number of notifications"""
+        if user_id not in user_id_to_latlon:
+            return []
+        user_location = user_id_to_latlon[user_id]
+        if user_location[0] == None:
+            return []
+        user_location = (float(user_location[0]),float(user_location[1]))
+        user_start = user_id_to_start[user_id]
+        user_end = user_id_to_end[user_id]
+
+        relevant_rescues = [i for i in rescue_to_time if user_start <= rescue_to_time[i] and rescue_to_time[i] <= user_end]
+        relevant_rescues = [i for i in relevant_rescues if haversine(user_location[0],user_location[1],rescue_to_latlon[i][0],rescue_to_latlon[i][1]) < 5]
+        relevant_rescues = [rescue_to_time[i] for i in relevant_rescues]
+        return sorted(relevant_rescues)
+    
+    def is_notification_same_week(last_rescue,new_rescue):
+        return last_rescue.isocalendar()[0:2] == new_rescue.isocalendar()[0:2]
+
+    def week_date_numbers(dates):
+        week_tracker = {}  # Dictionary to store week information
+        result = []  # To store the result
+
+        for date in dates:
+            year, week, _ = date.isocalendar()  # Get year and week number
+
+            # Check if the year-week combination is already in the dictionary
+            if (year, week) not in week_tracker:
+                week_tracker[(year, week)] = 1  # Start counting from 1 for a new week
+            else:
+                week_tracker[(year, week)] += 1  # Increment count for the same week
+            
+            # Append the count for the current date
+            result.append(week_tracker[(year, week)])
+        
+        return result
+
+    def get_match_probabilities(start,stop):
+        total_rescues_after_trip_dict = {0: 0, 1: 0, 2: 0, 3: 0}
+        total_rescues_dict = {1: 0,2: 0, 3: 0, 4: 0}
+        
+        for total_rescues in range(start,stop+1):
+            print("On total rescues {}".format(total_rescues))
+            if total_rescues not in num_rescues_to_user_id:
+                continue 
+            to_sample_users = num_rescues_to_user_id[total_rescues]
+            if len(to_sample_users) > 100:
+                to_sample_users = np.random.choice(to_sample_users,100)
+            for user_id in to_sample_users:
+                weeks = week_date_numbers(rescues_by_user[user_id])
+                rescues_after_trips_dict = {}
+                notifications_list = notifications(user_id)
+
+                for j in [1,2,3]:
+                    rescues_after_trip = []
+                    num_trips_in_week = j
+                    
+                    if j == 3:
+                        for num_trips_in_week in set(weeks):
+                            if num_trips_in_week >= 3:
+                                idx = weeks.index(num_trips_in_week)
+                                for i in range(len(notifications_list)):
+                                    if is_notification_same_week(rescues_by_user[user_id][idx],notifications_list[i]) and notifications_list[i]>rescues_by_user[user_id][idx]:
+                                        if idx < len(rescues_by_user[user_id])-1 and weeks[idx+1] == weeks[idx]+1:
+                                            if rescues_by_user[user_id][idx+1]>notifications_list[i]>rescues_by_user[user_id][idx]:
+                                                rescues_after_trip.append(notifications_list[i])
+                                        else:
+                                            rescues_after_trip.append(notifications_list[i])
+                                    while idx < len(rescues_by_user[user_id]) and (notifications_list[i] > rescues_by_user[user_id][idx] and not is_notification_same_week(rescues_by_user[user_id][idx],notifications_list[i]) or weeks[idx] != num_trips_in_week):
+                                        idx += 1
+                                    if idx == len(rescues_by_user[user_id]):
+                                        break 
+                    else:
+                        if num_trips_in_week in weeks:
+                            idx = weeks.index(num_trips_in_week)
+                            if idx != -1:
+                                if type(notifications_list) != type([]):
+                                    print(notifications_list)
+                                for i in range(len(notifications_list)):
+                                    if is_notification_same_week(rescues_by_user[user_id][idx],notifications_list[i]) and notifications_list[i]>rescues_by_user[user_id][idx]:
+                                        if idx < len(rescues_by_user[user_id])-1 and weeks[idx+1] == weeks[idx]+1:
+                                            if rescues_by_user[user_id][idx+1]>notifications_list[i]>rescues_by_user[user_id][idx]:
+                                                rescues_after_trip.append(notifications_list[i])
+                                        else:
+                                            rescues_after_trip.append(notifications_list[i])
+                                    while idx < len(rescues_by_user[user_id]) and (notifications_list[i] > rescues_by_user[user_id][idx] and not is_notification_same_week(rescues_by_user[user_id][idx],notifications_list[i]) or weeks[idx] != num_trips_in_week):
+                                        idx += 1
+                                    if idx == len(rescues_by_user[user_id]):
+                                        break 
+                    rescues_after_trips_dict[j] = len(rescues_after_trip)
+
+                rescues_after_trips_dict[0] = len(notifications_list)-sum(list(rescues_after_trips_dict.values()))
+                num_rescues_by_num = {1: weeks.count(1), 2: weeks.count(2), 3: weeks.count(3)}
+                num_rescues_by_num[4] = len(weeks)-num_rescues_by_num[1]-num_rescues_by_num[2]-num_rescues_by_num[3]
+            
+                for i in total_rescues_after_trip_dict:
+                    total_rescues_after_trip_dict[i] += rescues_after_trips_dict[i] 
+                for i in total_rescues_dict:
+                    total_rescues_dict[i] += num_rescues_by_num[i] 
+        
+        return total_rescues_after_trip_dict, total_rescues_dict 
+
+    def probs_of_interval(start,stop):
+        a,b = get_match_probabilities(start,stop)
+        probs = {}
+        for i in a:
+            probs[i] = b[i+1]/a[i]
+        probs
+        return probs 
+    trips_per_day = sum([len(rescues_by_user[i]) for i in rescues_by_user])
+    total_days = (max([max(rescues_by_user[i]) for i in rescues_by_user]) -min([min(rescues_by_user[i]) for i in rescues_by_user])).days 
+    
+    if quick:
+        trips_per_day /= total_days
+    else:
+        trips_per_day /= total_days/7
+    print("There are {} trips per week".format(trips_per_day))
+
+    intervals = [(3,10),(11,25),(26,100),(100,1000)]
+    num_large_states = len(intervals)+1 # Permanently burned out state + The four other states 
+    num_small_states = 4 # 4 Local States
+    deciding_states = 2 # Are we deciding between a new global transition or a new local transition
+    probs = [probs_of_interval(*i) for i in intervals]
+    fraction_quit = []
+    for start,end in intervals:
+        avg_weeks = []
+
+        for i in range(start,end+1):
+            if i in num_rescues_to_user_id:
+                for user_id in num_rescues_to_user_id[i]:
+                    avg_weeks.append((rescues_by_user[user_id][-1] - rescues_by_user[user_id][0]).days//7+1)
+        fraction_quit.append(1/2*1/np.mean(avg_weeks))
+
+    # Permanently burned out state 
+    transition_matrix = np.zeros((num_large_states*num_small_states*deciding_states,2,num_large_states*num_small_states*deciding_states))
+    transition_matrix[0:num_small_states,:,0] = 1
+    transition_matrix[num_small_states*num_large_states:num_small_states*num_large_states+num_small_states,:,0] = 1
+
+    # Limited experience, with local transitions, 0 trips completed
+
+    for global_num in list(range(1,len(intervals)+1)):
+        for local_num in range(0,4):
+            transition_matrix[global_num*num_small_states+local_num,0,global_num*num_small_states+local_num] = 1
+
+            if local_num == 3:
+                transition_matrix[global_num*num_small_states+local_num,1,global_num*num_small_states+local_num] = 1
+            else:
+                transition_matrix[global_num*num_small_states+local_num,1,global_num*num_small_states+local_num+1] = probs[global_num-1][local_num]
+                transition_matrix[global_num*num_small_states+local_num,1,global_num*num_small_states+local_num] = 1-probs[global_num-1][local_num]
+
+            transition_global_prob = poisson.pmf(1,1/trips_per_day)
+            transition_matrix[global_num*num_small_states+local_num,:] *= (1-transition_global_prob)
+            transition_matrix[(global_num)*num_small_states+local_num,:,(global_num+num_large_states)*num_small_states+local_num] = transition_global_prob
+
+    for global_num in list(range(1,len(intervals)+1)):
+        for local_num in range(0,4):
+            transition_matrix[(global_num+num_large_states)*num_small_states+local_num,:,0*num_large_states] = fraction_quit[global_num-1]
+            end_num = intervals[global_num-1][1]
+
+            if global_num < len(intervals):
+                transition_matrix[(global_num+num_large_states)*num_small_states+local_num,:,(global_num+1)*num_large_states] = local_num/end_num 
+                transition_matrix[(global_num+num_large_states)*num_small_states+local_num,:,global_num*num_large_states] = 1-fraction_quit[global_num-1]-transition_matrix[(global_num+num_large_states)*num_small_states+local_num,0,(global_num+1)*num_large_states]
+            else:
+                transition_matrix[(global_num+num_large_states)*num_small_states+local_num,:,global_num*num_large_states] = 1-fraction_quit[global_num-1]
+
+        
+    match_probabilitiy_matrix = np.zeros((num_large_states*num_small_states*deciding_states))
+    match_probabilitiy_matrix[num_small_states*num_large_states:] = 0
+    match_probabilitiy_matrix[:num_small_states] = 0
+
+    for global_num in list(range(1,len(intervals)+1)):
+        for local_num in range(0,4):
+            match_probabilitiy_matrix[global_num*num_large_states+local_num] = probs[global_num-1][local_num]
+
+
+    if quick:
+        json.dump(transition_matrix.tolist(),open("../../results/food_rescue/two_step_transitions_quick.json","w"))
+    else:
+        json.dump(transition_matrix.tolist(),open("../../results/food_rescue/two_step_transitions.json","w"))
+    json.dump(match_probabilitiy_matrix.tolist(),open("../../results/food_rescue/two_step_match_probs.json","w"))
+
+    start_prob = []
+    for start,stop in intervals:
+        tot = 0
+        for i in range(start,stop+1):
+            if i in num_rescues_to_user_id:
+                tot += len(num_rescues_to_user_id[i])
+        start_prob.append(tot)
+    start_prob = np.array(start_prob)/np.sum(start_prob)
+    start_prob 
+    initial_prob = [0 for i in range(40)]
+    for i in range(len(start_prob)):
+        initial_prob[num_small_states*(i+1)] = start_prob[i]
+    json.dump(initial_prob,open("../../results/food_rescue/two_step_start_probs.json","w"))

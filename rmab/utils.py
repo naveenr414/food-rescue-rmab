@@ -327,6 +327,9 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
     elif custom_reward_type == "probability_context":
         probs = s*a*match_probabilities
         return 1-np.prod(1-probs)
+    elif custom_reward_type == "probability_two_timestep":
+        probs = np.array([a[i]*match_probabilities[0][s[i]] for i in range(len(s))])
+        return 1-np.prod(1-probs)
     elif custom_reward_type == "probability_multi_state":
         s = np.array(s) 
         a = np.array(a) 
@@ -379,9 +382,7 @@ def contextual_custom_reward(s,a,match_probabilities,custom_reward_type,reward_p
     
     Returns: Float, reward"""
     if custom_reward_type == "probability_context":
-        c = context - 0.5 
-        new_match_probabilities = match_probabilities + c/2
-        new_match_probabilities = np.clip(new_match_probabilities,0,1)
+        new_match_probabilities = context
         probs = s*a*new_match_probabilities
         return 1-np.prod(1-probs)
     else:

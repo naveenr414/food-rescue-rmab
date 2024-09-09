@@ -38,22 +38,23 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 51
-    n_arms      = 4
+    seed        = 44
+    n_arms      = 10
     volunteers_per_arm = 1
-    budget      = 2
+    budget      = 5
     discount    = 0.9
     alpha       = 3 
-    n_episodes  = 105
+    n_episodes  = 5
     episode_len = 50 
     n_epochs    = 1
     save_with_date = False 
     lamb = 0.5
     prob_distro = 'uniform'
-    reward_type = "probability"
+    reward_type = "probability_context"
     reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1}
     out_folder = 'iterative'
     time_limit = 100
+    run_rate_limits = False 
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
@@ -74,6 +75,7 @@ else:
     parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='iterative')
     parser.add_argument('--time_limit', help='Online time limit for computation', type=float, default=100)
     parser.add_argument('--use_date', action='store_true')
+    parser.add_argument('--run_rate_limits', action='store_true')
 
     args = parser.parse_args()
 
@@ -91,6 +93,7 @@ else:
     prob_distro = args.prob_distro
     out_folder = args.out_folder
     reward_type = args.reward_type
+    run_rate_limits = args.run_rate_limits
     reward_parameters = {'universe_size': args.universe_size,
                         'arm_set_low': args.arm_set_low, 
                         'arm_set_high': args.arm_set_high}

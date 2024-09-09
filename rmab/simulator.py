@@ -1,6 +1,8 @@
 import gym
 import numpy as np
 from rmab.fr_dynamics import  get_food_rescue, get_food_rescue_top, get_food_rescue_multi_state
+from rmab.fr_dynamics import *
+import json 
 from rmab.utils import custom_reward, contextual_custom_reward
 from rmab.baseline_policies import random_policy
 import random
@@ -40,7 +42,7 @@ class RMABSimulator(gym.Env):
 
     def __init__(self, all_population, all_features, all_transitions, cohort_size, volunteers_per_arm,episode_len, n_instances, n_episodes, budget,
             discount,number_states=2,reward_style='state',match_probability_list = [],initial_prob=[[0.5,0.5] for i in range(100)],
-            best_state=1,worst_state=0,active_states=[1]):
+            best_state=1,worst_state=0,active_states=[1],contextual_prob=None):
         '''
         Initialization
         '''
@@ -70,6 +72,7 @@ class RMABSimulator(gym.Env):
         self.active_states = active_states
 
         self.match_probability_list = np.array(self.match_probability_list)
+        self.contextual_prob = contextual_prob
 
         assert_valid_transition(all_transitions)
 
@@ -183,6 +186,12 @@ class RMABSimulator(gym.Env):
     def observe(self):
         return self.states
 
+    def get_random_context(self):
+        if self.contextual_prob is None:
+            return [random.random() for i in range(len(self.match_probability_list))]
+        else:
+            return self.contextual_prob[np.random.choice(self.contextual_prob.shape[0])][self.cohort_idx]
+
     def step(self, action):
         assert len(action) == self.cohort_size*self.volunteers_per_arm
         assert np.sum(action) <= self.budget
@@ -199,7 +208,7 @@ class RMABSimulator(gym.Env):
 
         self.states = next_states.astype(int)
         self.timestep += 1
-        self.context = np.random.random(len(self.agent_idx))
+        self.context = self.get_random_context()
 
         done = self.is_terminal()
 
@@ -323,6 +332,7 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
     all_reward = np.zeros((n_epochs,test_T))
     all_active_rate = np.zeros((n_epochs,test_T))
+    num_fully_burned_out = np.zeros((n_epochs,test_T))
     env.train_epochs = T-test_T
     env.test_epochs = test_T
 
@@ -351,10 +361,12 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
             if t>=T-test_T:
                 env.is_training = False
 
-                if env.reward_type != "probability_multi_state":
-                    all_active_rate[epoch,t-(T-test_T)] = np.sum(state)/len(state)
-                else:
-                    all_active_rate[epoch,t-(T-test_T)] = len(np.where((state != 0) & (state != 4))[0])/len(state)
+                num_active = len([i for i in state if i in env.active_states])
+                all_active_rate[epoch,t-(T-test_T)] = num_active/len(state)
+
+                if env.reward_type == "probability_two_timestep":
+                    num_burned_out = len([i for i in state if i in [0,1,2,3,20,21,22,23]])
+                    num_fully_burned_out[epoch,t-(T-test_T)] = num_burned_out
 
             if should_train or t >=T-test_T:
                 action,memory = policy(env,state,budget,lamb,memory,per_epoch_results)
@@ -383,8 +395,8 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
     print("Took {} time for inference and {} time for training".format(inference_time_taken,train_time_taken))
 
     if get_memory:
-        return all_reward, all_active_rate, memory
-    return all_reward, all_active_rate
+        return all_reward, all_active_rate, memory, num_fully_burned_out
+    return all_reward, all_active_rate, num_fully_burned_out
 
 def get_discounted_reward(global_reward,active_rate,discount,lamb):
     """Compute the discounted combination of global reward and active rate
@@ -410,6 +422,86 @@ def get_discounted_reward(global_reward,active_rate,discount,lamb):
             all_rewards.append(reward)
     return all_rewards
 
+
+def get_average_reward(global_reward,active_rate,discount,lamb):
+    """Compute the discounted combination of global reward and active rate
+    
+    Arguments: 
+        global_reward: numpy array of size n_epochs x T
+        active_rate: numpy array of size n_epochs x T
+        discount: float, gamma
+
+    Returns: Float, average discounted reward across all epochs"""
+
+    all_rewards = []
+    combined_reward = global_reward*(1-lamb) + lamb*active_rate
+    num_steps = 1
+
+    step_size = len(global_reward[0])//num_steps
+
+    for epoch in range(len(global_reward)):
+        for i in range(num_steps):
+            reward = 0
+            for t in range(i*step_size,(i+1)*step_size):
+                reward += combined_reward[epoch,t]/step_size
+            all_rewards.append(reward)
+    return all_rewards
+
+
+def get_contextual_probabilities(all_population_size):
+    """Get the contextual probabilities for a given number of arms
+    
+    ARguments:
+        all_population_size: Integer, 100, how many different partitions 
+            of volunteer to look at
+        
+    Returns: Two things: a) probabilities for each context, and b) overall probabilities
+        a is a numpy matrix, while b is a numpy array"""
+
+    probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
+    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
+    probs_by_num = {}
+    for i in rescues_by_user:
+        if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
+            if len(rescues_by_user[i]) not in probs_by_num:
+                probs_by_num[len(rescues_by_user[i])] = []
+            probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
+    num_rescues_per_id = {}
+
+    for i in rescues_by_user:
+        if len(rescues_by_user[i]) not in num_rescues_per_id:
+            num_rescues_per_id[len(rescues_by_user[i])] = []
+        num_rescues_per_id[len(rescues_by_user[i])].append(i)    
+
+    partitions = partition_volunteers(probs_by_num,100)
+    all_user_ids = []
+    for i in range(len(partitions)):
+        user_id = np.random.choice(num_rescues_per_id[np.random.choice(partitions[i])])
+        all_user_ids.append(user_id)
+    rf = train_rf()
+    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data() 
+
+    def get_random_match_probs(user_ids,rescue):
+        return get_match_probs(rescue,user_ids,rf[0],donation_id_to_latlon, recipient_location_to_latlon, user_id_to_latlon, rescues_by_user)[0] 
+
+    def get_average_match_probs(user_ids,all_rescue_data):
+        sample = random.sample(all_rescue_data,100)
+
+        match_probs = [get_random_match_probs(user_ids,i) for i in sample]
+        match_probs = np.array(match_probs)
+        match_probs = np.mean(match_probs,axis=0)
+
+        return match_probs
+
+    num_contexts = 1000
+    probs_by_partition_context = np.zeros((num_contexts,all_population_size))
+    for i in range(num_contexts):
+        context = np.random.choice(all_rescue_data)
+        probs_by_partition_context[i] = get_random_match_probs(all_user_ids,context)[:all_population_size]
+    match_probabilities = get_average_match_probs(all_user_ids,all_rescue_data)
+
+    return probs_by_partition_context, match_probabilities
+
 def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
     """Create the specific transition probabilities for a given probability distribution, seed
     
@@ -430,6 +522,7 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
     best_state = 1
     worst_state = 0
     active_states = [1]
+    contextual_probs = None 
 
     if prob_distro == "uniform" or prob_distro == "linearity":
         all_population_size = 100 
@@ -438,7 +531,7 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
         all_population_size = 100 
         all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
     elif prob_distro == "food_rescue_context":
-        all_population_size = 100 
+        all_population_size = 100
         all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
     elif prob_distro == "food_rescue_match":
         all_population_size = 100 
@@ -454,6 +547,29 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
         best_state = 3
         worst_state = 4
         active_states = [1,2,3]
+    elif prob_distro == "food_rescue_two_timestep" or prob_distro == "food_rescue_two_timestep_quick":
+        all_population_size = 1000 
+        n_states = 40
+
+        if prob_distro == "food_rescue_two_timestep_quick":
+            all_transitions = np.array(json.load(open("../../results/food_rescue/two_step_transitions_quick.json"))).reshape((40,2,40))
+        else:
+            all_transitions = np.array(json.load(open("../../results/food_rescue/two_step_transitions.json"))).reshape((40,2,40))
+        expanded_array = np.expand_dims(all_transitions, axis=0)  # Shape becomes (1, 40, 2, 40)
+        all_transitions = np.tile(expanded_array, (all_population_size, 1, 1, 1))  # Shape becomes (100, 40, 2, 40)
+        probs_by_partition = None 
+        initial_prob = json.load(open("../../results/food_rescue/two_step_start_probs.json"))
+        expanded_array = np.expand_dims(initial_prob, axis=0)  # Shape becomes (1, 40, 2, 40)
+        initial_prob = np.tile(expanded_array, (all_population_size, 1))  # Shape becomes (100, 40, 2, 40)
+
+        best_state = 19
+        worst_state = 0
+        active_states = []
+
+        for i in range(1,5):
+            for j in range(1,4):
+                active_states.append(4*i+j) 
+        
     elif prob_distro == "food_rescue_top":
         all_population_size = 20 
         all_transitions, probs_by_partition = get_food_rescue_top(all_population_size)
@@ -489,6 +605,7 @@ def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,
     
     Returns: List of floats/sets, either m_{i} or Y_{i}(s_{i})"""
 
+    contextual_probs = None
     if reward_type == "set_cover":
         if prob_distro == "fixed":
             match_probabilities = []
@@ -509,10 +626,18 @@ def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,
                     temp_set.add(np.random.randint(0,reward_parameters['universe_size']))
                 match_probabilities.append(temp_set)
     elif "food_rescue" in prob_distro:
-        match_probabilities = [np.random.choice(probs_by_partition[i//volunteers_per_arm]) for i in range(N)] 
+        if prob_distro == "food_rescue_context":
+            contextual_probs,match_probabilities = get_contextual_probabilities(len(probs_by_partition))
+        elif prob_distro == "food_rescue_two_timestep" or prob_distro == "food_rescue_two_timestep_quick":
+            match_probabilities = json.load(open("../../results/food_rescue/two_step_match_probs.json"))
+            expanded_array = np.expand_dims(match_probabilities, axis=0)  # Shape becomes (1, 40, 2, 40)
+            match_probabilities = np.tile(expanded_array, (1000, 1))  # Shape becomes (100, 40, 2, 40)
+
+        else:
+            match_probabilities = [np.random.choice(probs_by_partition[i//volunteers_per_arm]) for i in range(N)] 
     else:
         match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
-    return match_probabilities
+    return contextual_probs, match_probabilities
 
 def create_environment(parameters,max_transition_prob=0.25):
     """Create an RMAB Simulator environment based on parameters
@@ -546,12 +671,12 @@ def create_environment(parameters,max_transition_prob=0.25):
     all_features = np.arange(all_population_size)
     N = all_population_size*volunteers_per_arm
 
-    match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,
+    contextual_prob, match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,
                                         parameters['volunteers_per_arm'])
 
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
                 n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='custom',match_probability_list=match_probabilities,
-                initial_prob=initial_prob,best_state=best_state,worst_state=worst_state,active_states=active_states)
+                initial_prob=initial_prob,best_state=best_state,worst_state=worst_state,active_states=active_states, contextual_prob=contextual_prob)
 
     if parameters['prob_distro'] == "one_time":
         N = parameters['n_arms']*parameters['volunteers_per_arm']
@@ -606,6 +731,7 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
         'time': [], 
         'match': [], 
         'active_rate': [],
+        'burned_out_rate': [],
     }
 
     for seed in seed_list:
@@ -641,17 +767,28 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
 
         if should_train:
             memory = policy_results[2]
+            burn_out_rates = policy_results[3] 
+        else:
+            memory = None 
+            burn_out_rates = policy_results[2] 
 
         match, active_rate = policy_results[0], policy_results[1]
         num_timesteps = match.size
         match = match.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
         active_rate = active_rate.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
         time_whittle = simulator.time_taken
-        discounted_reward = get_discounted_reward(match,active_rate,parameters['discount'],parameters['lamb'])
+
+        if parameters['prob_distro'] == 'food_rescue_two_timestep' or parameters['prob_distro'] == 'food_rescue_two_timestep_quick':
+            discounted_reward = get_average_reward(match,active_rate,parameters['discount'],parameters['lamb'])    
+        else:
+            discounted_reward = get_discounted_reward(match,active_rate,parameters['discount'],parameters['lamb'])
+        
         scores['reward'].append(discounted_reward)
         scores['time'].append(time_whittle)
         scores['match'].append(np.mean(match))
         scores['active_rate'].append(np.mean(active_rate))
+        scores['burned_out_rate'].append(burn_out_rates)
+
         if should_train:
             memories.append(memory)
 
