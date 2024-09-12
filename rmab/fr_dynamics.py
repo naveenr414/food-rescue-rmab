@@ -11,6 +11,8 @@ from rmab.utils import haversine, binary_search_count
 import rmab.secret as secret 
 from rmab.utils import partition_volunteers
 from scipy.stats import poisson
+import pickle 
+import os 
 
 def get_transitions(data_by_user,num_rescues):
     """Get the transition probabilities for a given agent with a total of 
@@ -1010,6 +1012,10 @@ def train_rf():
     
     Returns: A SkLearn Random Forest Classifier, and a dictionary
         with accuracy, precision, and recall scores"""
+
+    if os.path.exists("../../results/food_rescue/rf_classifier.pkl"):
+        rf = pickle.load(open("../../results/food_rescue/rf_classifier.pkl","rb"))
+        return rf, {}
 
     donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data() 
     train_X, train_Y, valid_X, valid_Y, test_X, test_Y = get_train_test_data(rescues_by_user,donation_id_to_latlon, recipient_location_to_latlon, user_id_to_latlon,all_rescue_data)

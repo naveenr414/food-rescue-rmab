@@ -213,7 +213,7 @@ class StateAction():
     """Class which abstracts out the game specifics
     Covers the reward and updates the arms pulled so far"""
 
-    def __init__(self,budget,discount,lamb,initial_state,volunteers_per_arm,n_arms,match_probs,max_rollout_actions,env,shapley=False,use_raw_reward=False,p_matrix=None):
+    def __init__(self,budget,discount,lamb,initial_state,volunteers_per_arm,n_arms,match_probs,max_rollout_actions,env,shapley=False,use_raw_reward=False,p_matrix=None,contextual=True):
         self.budget = budget 
         self.discount = discount 
         self.lamb = lamb  
@@ -230,6 +230,7 @@ class StateAction():
         self.use_raw_reward = use_raw_reward
         self.whittle_index = []
         self.p_matrix = p_matrix
+        self.contextual = contextual
 
     def get_legal_actions(self):
         """Find all the arms pulled, and make sure no duplicate arms are pulled
@@ -277,7 +278,10 @@ class StateAction():
                 last_action.append(0)
         last_action = np.array(last_action)
 
-        last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.context)
+        if self.contextual:
+            last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.context)
+        else:
+            last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,np.array(self.env.match_probability_list)[self.env.agent_idx])
         last_reward -= np.sum(last_state)/len(last_state)*self.lamb 
 
 
@@ -323,6 +327,7 @@ class StateAction():
         new_state_object.shapley = initial_state.shapley 
         new_state_object.whittle_index = initial_state.whittle_index 
         new_state_object.memory = initial_state.memory 
+        new_state_object.contextual = initial_state.contextual 
 
         if len(previous_state_actions)%new_state_object.budget == 0 and initial_state.max_rollout_actions > initial_state.budget:
             new_state = [0 for i in range(len(new_state_object.current_state))]
@@ -346,7 +351,7 @@ class StateAction():
         return str(self.previous_state_actions)
 
 
-def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",use_whittle=False):
+def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",use_whittle=False,contextual=True):
     """MCTS Policy which computes the best arms to pull
     Considers a rollout depth of budget*some constant
     
@@ -371,6 +376,7 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
         memory = Memoizer('optimal'),np.array(shapley_index_custom(env,np.ones(len(env.agent_idx)),{})[0])
 
     s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env,use_raw_reward=True)
+    s.contextual=contextual
     s.memory = memory 
     root = MonteCarloTreeSearchNode(s,env.mcts_test_iterations,transitions=env.transitions,use_whittle=False)
     selected_idx = root.best_action(budget)
@@ -380,11 +386,12 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
 
     return action, memory 
 
-def run_mcts(env,Q_multi_prob_list, p_matrix,whittle_matrix,budget,state,lamb):
+def run_mcts(env,Q_multi_prob_list, p_matrix,whittle_matrix,budget,state,lamb,contextual=True):
     """Boilerplate for running the MCTS method"""
     
     N = len(state)
     s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,env.match_probability_list[env.agent_idx],budget,env,shapley=False,p_matrix=p_matrix)
+    s.contextual=contextual
     s.attribution_method = "proportional" 
     s.previous_state_actions = []
     s.memory = (Q_multi_prob_list,p_matrix) 
@@ -398,7 +405,7 @@ def run_mcts(env,Q_multi_prob_list, p_matrix,whittle_matrix,budget,state,lamb):
     return action, (Q_multi_prob_list, p_matrix,whittle_matrix)
 
 
-def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
+def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional",contextual=True):
     """Leverage Shapley values + MCTS to compute indices 
     Basically uses MCTS to compute the potential rewards immideatly
     Then uses Shapley indices to estimate future rewards
@@ -438,9 +445,12 @@ def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setu
     else:
         Q_multi_prob_list, p_matrix, whittle_matrix = memory 
 
-    return run_mcts(env,Q_multi_prob_list,p_matrix,whittle_matrix,budget,state,lamb)
+    return run_mcts(env,Q_multi_prob_list,p_matrix,whittle_matrix,budget,state,lamb,contextual=contextual)
 
-def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
+def non_contextual_mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
+    return mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup=group_setup,attribution_method=attribution_method,contextual=False)
+
+def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional",contextual=True):
     """Leverage Shapley values + MCTS to compute indices + rollout 
     Basically uses MCTS to compute the potential rewards immideatly
     Then uses Shapley indices to estimate future rewards
@@ -494,4 +504,7 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
     else:
         Q_multi_prob_list, u_matrix, whittle_matrix = memory 
 
-    return run_mcts(env,Q_multi_prob_list,u_matrix,whittle_matrix,budget,state,lamb)
+    return run_mcts(env,Q_multi_prob_list,u_matrix,whittle_matrix,budget,state,lamb,contextual=contextual)
+
+def non_contextual_mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
+    return mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup=group_setup,attribution_method=attribution_method,contextual=False)

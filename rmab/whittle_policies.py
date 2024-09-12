@@ -128,10 +128,21 @@ def shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_result
 
     return action, (whittle_matrix)  
 
-def whittle_match_prob_now(env,state,N,pulled_arms):
+def get_whittle_function(contextual):
+    def run_function(env,state,N,pulled_arms):
+        return whittle_match_prob_now(env,state,N,pulled_arms,contextual=contextual)
+
+    return run_function
+
+def whittle_match_prob_now(env,state,N,pulled_arms,contextual=True):
     if len(pulled_arms) > 0:
         pulled_action = one_hot_fixed(pulled_arms[0],len(state),pulled_arms)
-        default_custom_reward = contextual_custom_reward(state,pulled_action,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.context)
+
+        if contextual:
+            default_custom_reward = contextual_custom_reward(state,pulled_action,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.context)
+        else:
+            default_custom_reward = custom_reward(state,pulled_action,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)
+
     else:
         pulled_action = [0 for i in range(len(state))]
         default_custom_reward = 0
@@ -141,12 +152,23 @@ def whittle_match_prob_now(env,state,N,pulled_arms):
         new_action = deepcopy(pulled_action)
         new_action[i] = 1
 
-        match_prob_all.append(contextual_custom_reward(state,new_action,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.context)-default_custom_reward)
+        if contextual:
+            match_prob_all.append(contextual_custom_reward(state,new_action,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.context)-default_custom_reward)
+        else:
+            match_prob_all.append(custom_reward(state,new_action,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)-default_custom_reward)
     return match_prob_all
 
-def shapley_match_prob_now(env,state,N,pulled_arms):
-    match_prob_all = np.array(shapley_index_custom_fixed(env,state,{},pulled_arms,env.context)[0])
+def shapley_match_prob_now(env,state,N,pulled_arms,contextual=True):
+    if contextual:
+        match_prob_all = np.array(shapley_index_custom_fixed(env,state,{},pulled_arms,env.context)[0])
+    else:
+        match_prob_all = np.array(shapley_index_custom_fixed(env,state,{},pulled_arms,np.array(env.match_probability_list)[env.agent_idx])[0])
     return match_prob_all
+
+def get_shapley_function(contextual):
+    def run_function(env,state,N,pulled_arms):
+        return shapley_match_prob_now(env,state,N,pulled_arms,contextual=contextual)
+    return run_function
 
 def iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,match_prob_now_function,reward_matrix):
     N = len(state)
@@ -186,7 +208,7 @@ def iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,mat
     return action, (reward_matrix) 
 
 
-def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
+def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True):
     """Whittle index policy based on computing the subsidy for each arm
     This approximates the problem as the sum of Linear rewards, then 
     Decomposes the problem into the problem for each arm individually
@@ -211,9 +233,14 @@ def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
     else:
         reward_matrix = memory 
 
-    return iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,whittle_match_prob_now,reward_matrix)
+    whittle_function = get_whittle_function(contextual)
 
-def shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
+    return iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,whittle_function,reward_matrix)
+
+def non_contextual_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
+    return whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=False)
+
+def shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True):
     """Whittle index policy based on computing the subsidy for each arm
     This approximates the problem as the sum of Linear rewards, then 
     Decomposes the problem into the problem for each arm individually
@@ -238,7 +265,14 @@ def shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_resu
     else:
         reward_matrix = memory 
 
-    return iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,shapley_match_prob_now,reward_matrix)
+    shapley_function = get_shapley_function(contextual)
+
+
+    return iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,shapley_function,reward_matrix)
+
+def non_contextual_shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
+    return shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=False)
+
 
 def contextual_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Whittle index policy based on computing the subsidy for each arm

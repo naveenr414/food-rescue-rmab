@@ -312,6 +312,12 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
     elif custom_reward_type == "max":
         probs = s*a*match_probabilities
         return np.max(probs) 
+    elif custom_reward_type == "std":
+        probs = s*a*match_probabilities
+        val_probs = [probs[i] for i in range(len(probs)) if a[i] == s[i] == 1]
+        if len(val_probs) == 0:
+            return 0
+        return np.std(val_probs) 
     elif custom_reward_type == "min":
         probs = s*a*match_probabilities
 

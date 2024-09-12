@@ -38,21 +38,21 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 45
-    n_arms      = 100
+    seed        = 44
+    n_arms      = 4
     volunteers_per_arm = 1
-    budget      = 50
+    budget      = 2
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 5
-    episode_len = 50000
+    episode_len = 50
     n_epochs    = 1
     save_with_date = False 
     lamb = 0.5
-    prob_distro = 'food_rescue_two_timestep'
-    reward_type = "probability_two_timestep"
+    prob_distro = 'food_rescue_context'
+    reward_type = "probability_context"
     reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1}
-    out_folder = 'iterative'
+    out_folder = 'journal_results/two_timestep'
     time_limit = 100
     run_rate_limits = False 
 else:
@@ -135,6 +135,7 @@ results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
+results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
 results['ratio'] = simulator.ratio 
 print(np.mean(rewards['reward']))
 
@@ -147,6 +148,7 @@ results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
+results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
 print(np.mean(rewards['reward']))
 # -
 
@@ -160,6 +162,7 @@ if n_arms * volunteers_per_arm <= 4 and 'multi_state' not in prob_distro and 'tw
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
     print(np.mean(rewards['reward']))
 
 # +
@@ -171,6 +174,7 @@ results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
+results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
 print(np.mean(rewards['reward']))
 
 # +
@@ -182,6 +186,7 @@ results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
+results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
 print(np.mean(rewards['reward']))
 # -
 
@@ -205,6 +210,7 @@ if n_arms * volunteers_per_arm <= 1000:
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
     print(np.mean(rewards['reward']))
 
 if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type:
@@ -227,7 +233,23 @@ if n_arms * volunteers_per_arm <= 250 and 'two_timestep' not in prob_distro:
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
     print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 250 and 'two_timestep' not in prob_distro and 'context' in reward_type:
+    policy = non_contextual_whittle_iterative_policy
+    name = "non_contextual_iterative_whittle"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
+    print(np.mean(rewards['reward']))
+
 
 if n_arms * volunteers_per_arm <= 25 and 'two_timestep' not in prob_distro:
     policy = shapley_whittle_iterative_policy
@@ -238,7 +260,22 @@ if n_arms * volunteers_per_arm <= 25 and 'two_timestep' not in prob_distro:
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
     print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 250 and 'two_timestep' not in prob_distro and 'context' in reward_type:
+    policy = non_contextual_shapley_whittle_iterative_policy
+    name = "non_contextual_shapley_iterative_whittle"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
+    print(np.mean(rewards['reward']))
+
 
 if n_arms * volunteers_per_arm <= 25 and 'two_timestep' not in prob_distro:
     policy = mcts_linear_policy
@@ -249,6 +286,21 @@ if n_arms * volunteers_per_arm <= 25 and 'two_timestep' not in prob_distro:
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+    print(np.mean(rewards['reward']))
+
+
+if n_arms * volunteers_per_arm <= 250 and 'two_timestep' not in prob_distro and 'context' in reward_type:
+    policy = non_contextual_mcts_linear_policy
+    name = "non_contextual_mcts_linear"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
     print(np.mean(rewards['reward']))
 
 
@@ -261,6 +313,22 @@ if n_arms * volunteers_per_arm <= 25 and 'two_timestep' not in prob_distro:
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
+    print(np.mean(rewards['reward']))
+
+
+if n_arms * volunteers_per_arm <= 250 and 'two_timestep' not in prob_distro and 'context' in reward_type:
+    policy = non_contextual_mcts_shapley_policy
+    name = "non_contextual_mcts_shapley"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
     print(np.mean(rewards['reward']))
 
 

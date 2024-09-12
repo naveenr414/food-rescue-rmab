@@ -627,7 +627,11 @@ def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,
                 match_probabilities.append(temp_set)
     elif "food_rescue" in prob_distro:
         if prob_distro == "food_rescue_context":
-            contextual_probs,match_probabilities = get_contextual_probabilities(len(probs_by_partition))
+            if len(probs_by_partition) == 102 and os.path.exists("../../results/food_rescue/match_probs_102.pkl"):
+                contextual_probs = pickle.load(open("../../results/food_rescue/contextual_probs_102.pkl","rb"))
+                match_probabilities = pickle.load(open("../../results/food_rescue/match_probs_102.pkl","rb"))
+            else:
+                contextual_probs,match_probabilities = get_contextual_probabilities(len(probs_by_partition))
         elif prob_distro == "food_rescue_two_timestep" or prob_distro == "food_rescue_two_timestep_quick":
             match_probabilities = json.load(open("../../results/food_rescue/two_step_match_probs.json"))
             expanded_array = np.expand_dims(match_probabilities, axis=0)  # Shape becomes (1, 40, 2, 40)
@@ -670,10 +674,8 @@ def create_environment(parameters,max_transition_prob=0.25):
 
     all_features = np.arange(all_population_size)
     N = all_population_size*volunteers_per_arm
-
     contextual_prob, match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,
                                         parameters['volunteers_per_arm'])
-
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
                 n_arms, volunteers_per_arm, episode_len, n_epochs, n_episodes, budget, discount,number_states=n_states, reward_style='custom',match_probability_list=match_probabilities,
                 initial_prob=initial_prob,best_state=best_state,worst_state=worst_state,active_states=active_states, contextual_prob=contextual_prob)
@@ -776,6 +778,8 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
         num_timesteps = match.size
         match = match.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
         active_rate = active_rate.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
+        burn_out_rates = burn_out_rates.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
+
         time_whittle = simulator.time_taken
 
         if parameters['prob_distro'] == 'food_rescue_two_timestep' or parameters['prob_distro'] == 'food_rescue_two_timestep_quick':
@@ -787,7 +791,7 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
         scores['time'].append(time_whittle)
         scores['match'].append(np.mean(match))
         scores['active_rate'].append(np.mean(active_rate))
-        scores['burned_out_rate'].append(burn_out_rates)
+        scores['burned_out_rate'].append(burn_out_rates.tolist())
 
         if should_train:
             memories.append(memory)
