@@ -103,70 +103,8 @@ def fast_compute_whittle_indices(transitions,rewards,discount):
     R0 = rewards[:,0]
     R1 = rewards[:,1]
     model = bandit.restless_bandit_from_P0P1_R0R1(P0,P1,R0,R1)
-    library_comp = model.whittle_indices(discount=discount)
+    library_comp = model.whittle_indices(discount=discount,check_indexability=False)
     return library_comp 
-
-    # n_states, n_actions, _ = transitions.shape 
-    # assert n_actions == 2
-
-    # pi = [1 for i in range(n_states)]
-    
-    # whittle_indices = []
-    # corresponding_arm = []
-
-    # delta = np.zeros((n_states,n_states))
-    # delta[:,1:] = discount*(transitions[:,1,1:] - transitions[:,0,1:])
-    # y = np.zeros((n_states))
-    # A = np.tril(np.ones((n_states,n_states)))
-    # for i in range(n_states):
-    #     for j in range(1,n_states):
-    #         A[i,j] -= discount * transitions[i,1,j]
-    # X = delta.dot(np.linalg.inv(A))
-    # mu = rewards[:,1] - rewards[:,0] + X.dot(rewards[:,1])
-    # sigma = np.argmin(mu)
-    # print("Min mu {}".format(np.min(mu)))
-        
-    # z = mu - np.ones(mu.shape)*mu[sigma]
-    # pi[sigma] = 0
-
-    # old_X = deepcopy(X)
-    # old_y = deepcopy(y)
-    # old_z = deepcopy(z)
-    # old_pi = deepcopy(pi)
-    # whittle_indices.append(mu[sigma])
-    # corresponding_arm.append(sigma)
-
-    # for k in range(1,n_states):
-    #     pi = deepcopy(old_pi) 
-    #     X = deepcopy(old_X)
-    #     for i in range(n_states):
-    #         for j in range(n_states):
-    #             X[i,j] -= old_X[i,corresponding_arm[-1]]/(1+old_X[corresponding_arm[-1],corresponding_arm[-1]])*old_X[corresponding_arm[-1],j]
-    #     y = old_y + (1-old_y[corresponding_arm[-1]])*X[:,corresponding_arm[-1]]
-    #     mu = np.zeros((n_states))
-    #     for i in range(n_states):
-    #         mu[i] = whittle_indices[-1] + old_z[i]/(1-y[i])
-    #         # else:
-    #         #     mu[i] = 1000 
-
-    #     sigma = np.where(np.array(pi) == 1)[0][np.argmin(mu[np.array(pi) == 1])]
-
-    #     z = old_z[-1] - (mu[sigma] - whittle_indices[-1])*(1-y)
-
-    #     old_X = deepcopy(X)
-    #     old_y = deepcopy(y)
-    #     old_z = deepcopy(z)
-
-    #     pi[sigma] = 0
-    #     old_pi = deepcopy(pi)
-    #     whittle_indices.append(mu[sigma])
-    #     corresponding_arm.append(sigma)
-    # all_WI = zip(whittle_indices,corresponding_arm)
-    # all_WI = sorted(all_WI,key=lambda k: k[1])
-
-    # print("All WI {}".format(all_WI))
-
-    # return [i[0] for i in all_WI]
 
 def get_init_bounds(transitions,lamb=0):
     """Generate bounds for upper and lower bounds on penalty

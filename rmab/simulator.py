@@ -9,6 +9,8 @@ import random
 import torch 
 from itertools import combinations
 import time 
+from copy import deepcopy
+from collections import Counter 
 
 class RMABSimulator(gym.Env):
     '''
@@ -199,12 +201,29 @@ class RMABSimulator(gym.Env):
         reward = self.get_reward(action)
 
         next_states = np.zeros(self.cohort_size*self.volunteers_per_arm)
-        for i in range(self.cohort_size):
-            for j in range(self.volunteers_per_arm):
-                idx = i*self.volunteers_per_arm + j
-                prob = self.transitions[i, self.states[idx], action[idx], :]
-                next_state = np.random.choice(a=self.number_states, p=prob)
-                next_states[idx] = next_state
+
+        if self.reward_type == "probability_two_timestep_2" or self.reward_type == "probability_two_timestep_test":
+            n_states = self.transitions[0].shape[0]
+            
+            should_global_transit = np.random.random()<self.transitions[0,0,0,n_states//2] and np.max(self.states)<n_states//2
+            for i in range(self.cohort_size):
+                for j in range(self.volunteers_per_arm):
+                    idx = i*self.volunteers_per_arm + j
+                    prob = deepcopy(self.transitions[i, self.states[idx], action[idx], :])
+                    if should_global_transit:
+                        prob[:n_states//2] = 0
+                    else:
+                        prob[n_states//2:] = 0
+                    prob /= np.sum(prob)
+                    next_state = np.random.choice(a=self.number_states, p=prob)
+                    next_states[idx] = next_state
+        else:
+            for i in range(self.cohort_size):
+                for j in range(self.volunteers_per_arm):
+                    idx = i*self.volunteers_per_arm + j
+                    prob = self.transitions[i, self.states[idx], action[idx], :]
+                    next_state = np.random.choice(a=self.number_states, p=prob)
+                    next_states[idx] = next_state
 
         self.states = next_states.astype(int)
         self.timestep += 1
@@ -332,7 +351,7 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
     all_reward = np.zeros((n_epochs,test_T))
     all_active_rate = np.zeros((n_epochs,test_T))
-    num_fully_burned_out = np.zeros((n_epochs,test_T))
+    num_fully_burned_out = np.zeros((n_epochs,test_T,n_states))
     env.train_epochs = T-test_T
     env.test_epochs = test_T
 
@@ -356,7 +375,6 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
         for t in range(0, T):
             if t == 1 and not should_train:
                 start = time.time()
-
             state = env.observe()
             if t>=T-test_T:
                 env.is_training = False
@@ -364,9 +382,9 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
                 num_active = len([i for i in state if i in env.active_states])
                 all_active_rate[epoch,t-(T-test_T)] = num_active/len(state)
 
-                if env.reward_type == "probability_two_timestep":
-                    num_burned_out = len([i for i in state if i in [0,1,2,3,20,21,22,23]])
-                    num_fully_burned_out[epoch,t-(T-test_T)] = num_burned_out
+                counter_state = Counter(state)
+                to_array = [counter_state[i] if i in counter_state else 0 for i in range(n_states)]
+                num_fully_burned_out[epoch,t-(T-test_T)] = np.array(to_array)
 
             if should_train or t >=T-test_T:
                 action,memory = policy(env,state,budget,lamb,memory,per_epoch_results)
@@ -569,7 +587,238 @@ def create_transitions_from_prob(prob_distro,seed,max_transition_prob=0.25):
         for i in range(1,5):
             for j in range(1,4):
                 active_states.append(4*i+j) 
-        
+    elif prob_distro == "food_rescue_two_timestep_2":
+        all_population_size = 100 
+        n_states = 12
+        active_states = [3,4,5]
+        alpha = 5
+        w = 25
+        m_1 = 0.01
+        m_2 = 0.1
+        average_trips_per_week = 100
+        n_0 = 0
+        r_2 = 0
+        r_1 = 0.9
+        all_population_size = 100
+        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
+
+        initial_prob = np.zeros((all_population_size,n_states))
+        initial_prob[:,-1] = 1
+
+        all_transitions = np.zeros((all_population_size,n_states,2,n_states))
+
+        all_transitions[:,0,:,0+n_states//2] = 1/average_trips_per_week
+        all_transitions[:,0,:,0] = 1-1/average_trips_per_week
+
+        all_transitions[:,1,:,1+n_states//2] = 1/average_trips_per_week
+        all_transitions[:,1,:,1] = 1-1/average_trips_per_week
+
+        all_transitions[:,2,:,2+n_states//2] = 1/average_trips_per_week
+        all_transitions[:,2,:,2] = 1-1/average_trips_per_week
+
+        all_transitions[:,2,:,2+n_states//2] = 1/average_trips_per_week
+        all_transitions[:,2,:,2] = 1-1/average_trips_per_week
+
+        all_transitions[:,3,:,3+n_states//2] = 1/average_trips_per_week
+        all_transitions[:,3,:,3] = (1-1/average_trips_per_week)
+
+        all_transitions[:,4,:,4+n_states//2] = 1/average_trips_per_week
+        all_transitions[:,4,0,4] = (1-1/average_trips_per_week)
+        all_transitions[:,4,1,4] = (1-1/average_trips_per_week)*(1-m_2)
+        all_transitions[:,4,1,3] = (1-1/average_trips_per_week)*(m_2)
+
+        all_transitions[:,5,:,5+n_states//2] = 1/average_trips_per_week
+        all_transitions[:,5,0,5] = (1-1/average_trips_per_week)
+        all_transitions[:,5,1,5] = (1-1/average_trips_per_week)*(1-m_1)
+        all_transitions[:,5,1,4] = (1-1/average_trips_per_week)*(m_1)
+
+        all_transitions[:,6,:,0] = 1
+        all_transitions[:,7,:,0] = 1
+        all_transitions[:,8,:,0] = 1
+
+        all_transitions[:,9,:,5] = r_2
+        all_transitions[:,9,:,4] = (1-r_2)*0
+        all_transitions[:,9,:,0] = (1-r_2)*1
+
+        all_transitions[:,10,:,5] = r_1
+        all_transitions[:,10,:,4] = (1-r_1)*0.4
+        all_transitions[:,10,:,3] = (1-r_1)*0.4
+        all_transitions[:,10,:,0] = (1-r_1)*0.2
+
+        all_transitions[:,11,:,5] = 1
+
+        best_state = 5
+        worst_state = 0
+        # transition_decay_rates = np.array([0.001,0.005,0.02])*0.1# np.array([0.011738983315546994,0.014784351492750982,0.019079101486243786])
+        # global_rate = 1/20
+        # intervals = [0,50,100]
+
+        # all_population_size = 100 
+        # n_states = 12
+        # active_states = [3,4,5]
+        # all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
+
+        # for i in range(len(probs_by_partition)):
+        #     for j in range(len(probs_by_partition[i])):
+        #         probs_by_partition[i][j] = 0.02+np.random.random()/100
+
+        # initial_prob = np.zeros((all_population_size,n_states))
+        # initial_prob[:,-1] = 1
+
+        # all_transitions = np.zeros((all_population_size,n_states,2,n_states))
+        # all_transitions[:,0,:,6] = global_rate 
+        # all_transitions[:,0,:,0] = 1-global_rate 
+
+        # all_transitions[:,1,:,6] = global_rate 
+        # all_transitions[:,1,:,1] = 1-global_rate 
+
+        # all_transitions[:,2,:,6] = global_rate 
+        # all_transitions[:,2,:,2] = 1-global_rate 
+
+        # all_transitions[:,3,:,9] = global_rate 
+        # all_transitions[:,3,0,3] = (1-global_rate)
+        # all_transitions[:,3,1,3] = (1-global_rate)*(1-1/(intervals[1]-intervals[0]))
+        # all_transitions[:,3,1,4] = (1-global_rate)*(1/(intervals[1]-intervals[0]))
+
+        # all_transitions[:,4,:,10] = global_rate 
+        # all_transitions[:,4,0,4] = (1-global_rate)
+        # all_transitions[:,4,1,4] = (1-global_rate)*(1-1/(intervals[1]-intervals[0]))
+        # all_transitions[:,4,1,5] = (1-global_rate)*(1/(intervals[2]-intervals[1]))
+
+        # all_transitions[:,5,:,11] = global_rate 
+        # all_transitions[:,5,:,5] = (1-global_rate)
+
+        # all_transitions[:,6,:,0] = 1
+        # all_transitions[:,7,:,1] = 1
+        # all_transitions[:,8,:,2] = 1
+
+        # all_transitions[:,9,:,0] = transition_decay_rates[0]
+        # all_transitions[:,9,:,3] = 1-transition_decay_rates[0]
+
+        # all_transitions[:,10,:,0] = transition_decay_rates[1]
+        # all_transitions[:,10,:,3] = 1-transition_decay_rates[1]
+
+        # all_transitions[:,11,:,0] = transition_decay_rates[2]
+        # all_transitions[:,11,:,3] = 1-transition_decay_rates[2]
+
+        # best_state = 3
+        # worst_state = 0
+    elif prob_distro == "multi_state_test":
+        active_states = [1,2,3] # TODO: Change this back to [1,2,3]
+        n_states = 4
+        all_population_size = 100
+        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
+        alpha = 0.001
+
+        initial_prob = np.zeros((all_population_size,n_states))
+        initial_prob[:,-1] = 1
+
+        probs_increase = np.array([0.0,alpha,alpha,alpha])/4
+
+        probs_decrease = np.array([0,0,1/65,0.1])
+        prob_burnout = np.array([0,0.01,0.007,0.015])
+
+        all_transitions = np.zeros((all_population_size,n_states,2,n_states))
+
+        all_transitions[:,0,1,0] = 1
+        all_transitions[:,0,0,0] = 1
+
+        all_transitions[:,1,0,2] = probs_increase[1]
+        all_transitions[:,1,0,1] = 1-probs_increase[1]
+        all_transitions[:,1,1,0] = prob_burnout[1]
+        all_transitions[:,1,1,1] = 1-prob_burnout[1]
+
+        all_transitions[:,2,1,0] = prob_burnout[2]
+        all_transitions[:,2,1,1] = probs_decrease[2]
+        all_transitions[:,2,1,2] = 1-probs_decrease[2]-prob_burnout[2]
+        all_transitions[:,2,0,3] = probs_increase[2]
+        all_transitions[:,2,0,2] = 1-probs_increase[2]
+
+        all_transitions[:,3,1,0] = prob_burnout[3]
+        all_transitions[:,3,1,2] = probs_decrease[3]
+        all_transitions[:,3,1,3] = 1-probs_decrease[3]-prob_burnout[3]
+        all_transitions[:,3,0,3] = 1
+        best_state = 3
+        worst_state = 0
+
+    elif prob_distro == "two_timestep_test":
+        active_states = [4,5,6,7] # TODO: Change this back to [1,2,3]
+        n_states = 16
+        all_population_size = 100
+        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
+        alpha = 0.4
+
+        initial_prob = np.zeros((all_population_size,n_states))
+        initial_prob[:,-1] = 1
+
+        probs_increase = np.array([0.21331316187594554,0.32914046121593293,0.2880228136882129,0.47104247104247104])
+        global_rate = 1/1250
+
+        probs_decrease = np.array([0,1/50,1/40,0.1])
+        prob_burnout = np.array([0.007127579383269578,0.008329426972283782,0.013419247045985072,0.02180560038400925])
+
+        all_transitions = np.zeros((all_population_size,n_states,2,n_states))
+        all_transitions[:,0,1,0] = 1
+        all_transitions[:,0,0,0] = 1
+
+        all_transitions[:,1,1,0] = probs_decrease[1]
+        all_transitions[:,1,1,1] = 1-probs_decrease[1] 
+        all_transitions[:,1,0,1] = 1
+
+        all_transitions[:,2,1,1] = probs_decrease[2]
+        all_transitions[:,2,1,2] = 1-probs_decrease[2]
+        all_transitions[:,2,0,2] = 1
+
+        all_transitions[:,3,1,2] = probs_decrease[3]
+        all_transitions[:,3,1,3] = 1-probs_decrease[3]
+        all_transitions[:,3,0,3] = 1
+
+        all_transitions[:,4,1,0] = prob_burnout[0]
+        all_transitions[:,4,1,4] = 1-prob_burnout[0]
+        all_transitions[:,4,0,4] = 1
+
+        all_transitions[:,5,1,0] = prob_burnout[1]
+        all_transitions[:,5,1,4] = probs_decrease[1]
+        all_transitions[:,5,1,5] = 1-prob_burnout[1]-probs_decrease[1]
+        all_transitions[:,5,0,5] = 1
+
+        all_transitions[:,6,1,0] = prob_burnout[2]
+        all_transitions[:,6,1,5] = probs_decrease[2]
+        all_transitions[:,6,1,6] = 1-prob_burnout[2]-probs_decrease[2]
+        all_transitions[:,6,0,6] = 1
+
+        all_transitions[:,7,1,0] = prob_burnout[3]
+        all_transitions[:,7,1,6] = probs_decrease[3]
+        all_transitions[:,7,1,7] = 1-prob_burnout[3]-probs_decrease[3]
+        all_transitions[:,7,0,7] = 1
+
+        all_transitions *= (1-global_rate)
+        all_transitions[:,0,:,8] = global_rate 
+        all_transitions[:,1,:,9] = global_rate 
+        all_transitions[:,2,:,10] = global_rate 
+        all_transitions[:,3,:,11] = global_rate 
+        all_transitions[:,4,:,12] = global_rate 
+        all_transitions[:,5,:,13] = global_rate 
+        all_transitions[:,6,:,14] = global_rate 
+        all_transitions[:,7,:,15] = global_rate 
+
+        all_transitions[:,8,:,7] = probs_increase[0]
+        all_transitions[:,8,:,3] = 1-probs_increase[0]
+        all_transitions[:,9,:,7] = probs_increase[1]
+        all_transitions[:,9,:,3] = 1-probs_increase[1]
+        all_transitions[:,10,:,7] = probs_increase[2]
+        all_transitions[:,10,:,3] = 1-probs_increase[2]
+        all_transitions[:,11,:,7] = probs_increase[3]
+        all_transitions[:,11,:,3] = 1-probs_increase[3]
+
+
+        all_transitions[:,12,:,7] = 1
+        all_transitions[:,13,:,7] = 1
+        all_transitions[:,14,:,7] = 1
+        all_transitions[:,15,:,7] = 1
+        best_state = 7
+        worst_state = 0
+
     elif prob_distro == "food_rescue_top":
         all_population_size = 20 
         all_transitions, probs_by_partition = get_food_rescue_top(all_population_size)
@@ -778,11 +1027,11 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
         num_timesteps = match.size
         match = match.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
         active_rate = active_rate.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
-        burn_out_rates = burn_out_rates.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len']))
+        burn_out_rates = burn_out_rates.reshape((num_timesteps//parameters['episode_len'],parameters['episode_len'],simulator.number_states))
 
         time_whittle = simulator.time_taken
 
-        if parameters['prob_distro'] == 'food_rescue_two_timestep' or parameters['prob_distro'] == 'food_rescue_two_timestep_quick':
+        if parameters['prob_distro'] == 'food_rescue_two_timestep' or parameters['prob_distro'] == 'food_rescue_two_timestep_quick' or parameters['prob_distro'] == 'food_rescue_two_timestep_2' or parameters['prob_distro'] == 'multi_state_test' or parameters['prob_distro'] == 'two_timestep_test':
             discounted_reward = get_average_reward(match,active_rate,parameters['discount'],parameters['lamb'])    
         else:
             discounted_reward = get_discounted_reward(match,active_rate,parameters['discount'],parameters['lamb'])

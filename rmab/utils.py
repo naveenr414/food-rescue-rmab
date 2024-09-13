@@ -336,6 +336,21 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
     elif custom_reward_type == "probability_two_timestep":
         probs = np.array([a[i]*match_probabilities[0][s[i]] for i in range(len(s))])
         return 1-np.prod(1-probs)
+    elif custom_reward_type == "probability_two_timestep_2":
+        # TODO: Always change this/make it more general
+        real_s = np.array([1 if s[i] in [3,4,5] else 0 for i in range(len(s))])
+        probs = real_s*a*match_probabilities
+        return 1-np.prod(1-probs)
+    elif custom_reward_type == "probability_multi_state_test":
+        # TODO: Always change this/make it more general
+        real_s = np.array([1 if s[i] in [1,2,3] else 0 for i in range(len(s))])
+        probs = real_s*a*match_probabilities
+        return 1-np.prod(1-probs)
+    elif custom_reward_type == "probability_two_timestep_test":
+        # TODO: Always change this/make it more general
+        real_s = np.array([1 if s[i] in [4,5,6,7] else 0 for i in range(len(s))])
+        probs = real_s*a*match_probabilities
+        return 1-np.prod(1-probs)
     elif custom_reward_type == "probability_multi_state":
         s = np.array(s) 
         a = np.array(a) 

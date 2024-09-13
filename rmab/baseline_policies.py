@@ -52,6 +52,9 @@ def greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
 
+    print("State {}".format(state))
+    print("Action {}".format(action))
+
     return action, p_matrix 
 
 def random_policy(env,state,budget,lamb,memory, per_epoch_results):

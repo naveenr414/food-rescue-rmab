@@ -38,12 +38,15 @@ def whittle_activity_policy(env,state,budget,lamb,memory,per_epoch_results):
         whittle_matrix = memory 
     
     state_WI = [whittle_matrix[i][state[i]] for i in range(N)]
-
     sorted_WI = np.argsort(state_WI)[::-1]
-    action = np.zeros(N, dtype=np.int8)
-    action[sorted_WI[:budget]] = 1
 
-    return action, (whittle_matrix)  
+    # Filter sorted_WI to include only indices where the corresponding value in state_WI is >= 0
+    filtered_WI = [i for i in sorted_WI if state_WI[i] >= 0]
+
+    action = np.zeros(N, dtype=np.int8)
+    # Only assign action=1 to the top `budget` indices from the filtered sorted_WI
+    action[filtered_WI[:budget]] = 1
+    return action, whittle_matrix
 
 
 def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
@@ -72,17 +75,22 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
         for i in range(N):
             for j in range(n_states):
                 whittle_matrix[i] = fast_compute_whittle_indices(env.transitions[i//env.volunteers_per_arm],reward_matrix[i],env.discount)
-    
+
     else:
         whittle_matrix = memory 
     
     
     state_WI = [whittle_matrix[i][state[i]] for i in range(N)]
     sorted_WI = np.argsort(state_WI)[::-1]
-    action = np.zeros(N, dtype=np.int8)
-    action[sorted_WI[:budget]] = 1
+    print(state_WI)
+    # Filter sorted_WI to include only indices where the corresponding value in state_WI is >= 0
+    filtered_WI = [i for i in sorted_WI if state_WI[i] >= 0]
 
-    return action, (whittle_matrix)  
+    action = np.zeros(N, dtype=np.int8)
+    # Only assign action=1 to the top `budget` indices from the filtered sorted_WI
+    action[filtered_WI[:budget]] = 1
+    print(state,action)
+    return action, whittle_matrix
 
 
 def shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_results):
@@ -120,13 +128,22 @@ def shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_result
     else:
         whittle_matrix = memory 
     
-    state_WI = [whittle_matrix[i][state[i]] for i in range(N)]
+    state_WI = np.array([whittle_matrix[i][state[i]] for i in range(N)])
+
 
     sorted_WI = np.argsort(state_WI)[::-1]
-    action = np.zeros(N, dtype=np.int8)
-    action[sorted_WI[:budget]] = 1
 
-    return action, (whittle_matrix)  
+    # Filter sorted_WI to include only indices where the corresponding value in state_WI is >= 0
+    filtered_WI = [i for i in sorted_WI if state_WI[i] >= 0]
+
+    action = np.zeros(N, dtype=np.int8)
+    # Only assign action=1 to the top `budget` indices from the filtered sorted_WI
+    action[filtered_WI[:budget]] = 1
+
+
+    print(state,action,state_WI)
+
+    return action, whittle_matrix
 
 def get_whittle_function(contextual):
     def run_function(env,state,N,pulled_arms):
@@ -357,8 +374,10 @@ def contextual_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
         state_WI.append(state_WI_value[-1])
 
     sorted_WI = np.argsort(state_WI)[::-1]
+    filtered_WI = [i for i in sorted_WI if state_WI[i] >= 0]
+
     action = np.zeros(N, dtype=np.int8)
-    action[sorted_WI[:budget]] = 1
+    action[filtered_WI[:budget]] = 1
 
     return action, (new_reward_matrix,transitions)  
 
@@ -448,7 +467,8 @@ def contextual_shapley_policy(env,state,budget,lamb,memory,per_epoch_results):
         state_WI.append(state_WI_value[-1])
 
     sorted_WI = np.argsort(state_WI)[::-1]
+    filtered_WI = [i for i in sorted_WI if state_WI[i] >= 0]
     action = np.zeros(N, dtype=np.int8)
-    action[sorted_WI[:budget]] = 1
+    action[filtered_WI[:budget]] = 1
 
     return action, (new_reward_matrix,transitions) 
