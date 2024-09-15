@@ -11,17 +11,22 @@ do
         seed=$((${session}+${start_seed}))
         echo ${seed}
 
-        for n_arms in 4 10 
+        for recovery_rate in 0 0.001 0.01 0.1 0.25 0.5 1
         do 
-            budget_frac=0.5 
-            budget=$(echo "${n_arms}*${budget_frac}" | bc)
-            budget=$(printf "%.0f" $budget)
+            for prob_distro in multi_state_constant multi_state_decreasing multi_state_increasing
+            do 
+                for n_arms in 4
+                do 
+                    budget_frac=0.5 
+                    budget=$(echo "${n_arms}*${budget_frac}" | bc)
+                    budget=$(printf "%.0f" $budget)
 
-            prob_distro=food_rescue_multi_state
-            reward_type=probability_multi_state
+                    prob_distro=${prob_distro}
+                    reward_type=probability_multi_state
 
-            tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type ${reward_type} --arm_set_low 0 --arm_set_high 1 --prob_distro ${prob_distro} --out_folder journal_results/multi_state" ENTER
-            tmux send-keys -t match_${session} "conda activate food; python baselines.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type ${reward_type} --arm_set_low 0 --arm_set_high 1 --prob_distro ${prob_distro} --out_folder baselines/journal" ENTER
+                    tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type ${reward_type} --discount 0.9999 --arm_set_low 0 --arm_set_high 1 --prob_distro ${prob_distro} --episode_len 1250 --n_episodes 5 --lamb 0 --out_folder journal_results/multi_state --recovery_rate ${recovery_rate}" ENTER
+                done 
+            done 
         done 
     done 
 done 

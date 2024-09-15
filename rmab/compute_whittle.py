@@ -27,10 +27,7 @@ def get_q_vals(transitions, state, predicted_subsidy, discount, threshold=value_
     n_states, n_actions, _ = transitions.shape
     
     value_func = np.array([random.random() for i in range(n_states)])
-    
-    # # TODO: Uncomment the line above
-    # value_func = np.array([9.99960129e-03,2.32338982e-02,2.40960342e-02,2.29367783e-02,8.53275816e-06])
-    
+        
     difference = np.ones((n_states))
     iters = 0
 
@@ -104,6 +101,7 @@ def fast_compute_whittle_indices(transitions,rewards,discount):
     R1 = rewards[:,1]
     model = bandit.restless_bandit_from_P0P1_R0R1(P0,P1,R0,R1)
     library_comp = model.whittle_indices(discount=discount,check_indexability=False)
+    
     return library_comp 
 
 def get_init_bounds(transitions,lamb=0):
@@ -238,7 +236,7 @@ def arm_value_iteration_exponential(all_transitions, discount, budget, volunteer
         return rew
     
     def reward_custom(s,a):
-        val = custom_reward(s,a,match_probability_list,reward_type,reward_parameters)*(1-lamb) + lamb*np.sum(s)/len(s)
+        val = custom_reward(s,a,match_probability_list,reward_type,reward_parameters,[1])*(1-lamb) + lamb*np.sum(s)/len(s)
         return val 
 
     if reward_function == 'activity':
@@ -345,9 +343,6 @@ def Q_multi_prob(transitions, state, predicted_subsidy, discount, threshold=valu
         the rewards for pulling/not pulling an arm now
     """
     assert discount < 1
-    # TODO: Make sure we can correctly comment this part out 
-    # # TODO: I believe in the 0 case, that there's a simpler way to compute Q Values
-    # assert state == 1
     n_states, n_actions, _ = transitions.shape
 
     new_transitions = np.zeros((n_states+1,2,n_states))

@@ -12,7 +12,7 @@ def compute_p_matrix(env,N):
         for s in range(n_states):
             default_state = [env.worst_state for _ in range(N)]
             default_state[i] = s
-            p_matrix[i,s] = custom_reward(default_state,one_hot(i,N),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)
+            p_matrix[i,s] = custom_reward(default_state,one_hot(i,N),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.active_states)
     return p_matrix 
 
 def compute_reward_matrix(env,N,lamb):
@@ -51,9 +51,6 @@ def greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
     selected_idx = np.argsort(score_by_agent)[-budget:][::-1]
     action = np.zeros(N, dtype=np.int8)
     action[selected_idx] = 1
-
-    print("State {}".format(state))
-    print("Action {}".format(action))
 
     return action, p_matrix 
 
@@ -114,8 +111,6 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
 
     action = np.zeros(N, dtype=np.int8)
     action = np.array([int(i) for i in binary_val])
-
-    rew = custom_reward(state,action,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters)
 
     return action, None
 

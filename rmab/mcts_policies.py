@@ -19,8 +19,8 @@ def get_reward_max(state,action,match_probs,lamb):
     score = np.max(prod_state)
     return score*(1-lamb) + np.sum(state)/len(state)*lamb
 
-def get_reward_custom(state,action,match_probs,lamb,reward_type,reward_parameters,context):
-    return contextual_custom_reward(state,action,match_probs,reward_type,reward_parameters,context)*(1-lamb) + np.sum(state)/len(state)*lamb
+def get_reward_custom(state,action,match_probs,lamb,reward_type,reward_parameters,active_states,context):
+    return contextual_custom_reward(state,action,match_probs,reward_type,reward_parameters,active_states,context)*(1-lamb) + np.sum(state)/len(state)*lamb
 
 class MonteCarloTreeSearchNode():
     """Class which allows for MCTS to run
@@ -279,9 +279,9 @@ class StateAction():
         last_action = np.array(last_action)
 
         if self.contextual:
-            last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.context)
+            last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.active_states,self.env.context)
         else:
-            last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,np.array(self.env.match_probability_list)[self.env.agent_idx])
+            last_reward = get_reward_custom(last_state,last_action,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.active_states,np.array(self.env.match_probability_list)[self.env.agent_idx])
         last_reward -= np.sum(last_state)/len(last_state)*self.lamb 
 
 
@@ -300,7 +300,7 @@ class StateAction():
                 action_0_1 = np.array(action_0_1)
 
                 # TODO: Make this an option whether or not we select contextually 
-                total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.context)
+                total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.active_states,self.env.context)
             return last_action, total_reward 
         arm_q = 0
 

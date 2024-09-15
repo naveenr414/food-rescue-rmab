@@ -1,7 +1,7 @@
 import numpy as np
 from datetime import datetime 
 import glob 
-import json 
+import ujson as json 
 import os 
 import secrets
 from scipy.stats import norm, beta
@@ -69,13 +69,18 @@ def delete_duplicate_results(folder_name,result_name,data):
     all_results = glob.glob("../../results/{}/{}*.json".format(folder_name,result_name))
 
     for file_name in all_results:
-        load_file = json.load(open(file_name,"r"))
-
-        if 'parameters' in load_file and load_file['parameters'] == data['parameters']:
-            try:
-                os.remove(file_name)
-            except OSError as e:
-                print(f"Error deleting {file_name}: {e}")
+        try:
+            f = open(file_name)
+            first_few = f.read(1000)
+            first_few = first_few.split("}")[0]+"}}"
+            load_file = json.loads(first_few)['parameters']
+            if load_file == data['parameters']:
+                try:
+                    os.remove(file_name)
+                except OSError as e:
+                    print(f"Error deleting {file_name}: {e}")
+        except Exception as e:
+            print(f"An error occurred: {e}")
 
 def get_results_matching_parameters(folder_name,result_name,parameters):
     """Get a list of dictionaries, with data, which match some set of parameters
@@ -91,12 +96,15 @@ def get_results_matching_parameters(folder_name,result_name,parameters):
     ret_results = []
 
     for file_name in all_results:
-        load_file = json.load(open(file_name,"r"))
-
+        f = open(file_name)
+        first_few = f.read(1000)
+        first_few = first_few.split("}")[0]+"}}"
+        load_file = json.loads(first_few)
         for p in parameters:
             if p not in load_file['parameters'] or load_file['parameters'][p] != parameters[p]:
                 break 
         else:
+            load_file = json.load(open(file_name,"r"))
             ret_results.append(load_file)
     return ret_results
 
@@ -287,7 +295,7 @@ def one_hot_fixed(index,length,fixed):
     return s
 
 
-def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
+def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,active_states):
     """Custom defined submodular reward which is maximized by
         each policy
     
@@ -328,7 +336,8 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
         else:
             return np.min(val_probs) 
     elif custom_reward_type == "probability":
-        probs = s*a*match_probabilities
+        real_s = np.array([1 if s[i] in active_states else 0 for i in range(len(s))])
+        probs = real_s*a*match_probabilities
         return 1-np.prod(1-probs)
     elif custom_reward_type == "probability_context":
         probs = s*a*match_probabilities
@@ -341,21 +350,15 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
         real_s = np.array([1 if s[i] in [3,4,5] else 0 for i in range(len(s))])
         probs = real_s*a*match_probabilities
         return 1-np.prod(1-probs)
-    elif custom_reward_type == "probability_multi_state_test":
+    elif custom_reward_type == "probability_multi_state":
         # TODO: Always change this/make it more general
-        real_s = np.array([1 if s[i] in [1,2,3] else 0 for i in range(len(s))])
+        real_s = np.array([1 if s[i] in [1,2,3,4] else 0 for i in range(len(s))])
         probs = real_s*a*match_probabilities
         return 1-np.prod(1-probs)
     elif custom_reward_type == "probability_two_timestep_test":
         # TODO: Always change this/make it more general
         real_s = np.array([1 if s[i] in [4,5,6,7] else 0 for i in range(len(s))])
         probs = real_s*a*match_probabilities
-        return 1-np.prod(1-probs)
-    elif custom_reward_type == "probability_multi_state":
-        s = np.array(s) 
-        a = np.array(a) 
-        probs = s*a*match_probabilities
-        probs[s == 4] = 0
         return 1-np.prod(1-probs)
     elif custom_reward_type == "two_by_two":
         probs = s*a*match_probabilities
@@ -384,12 +387,13 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters):
 
         return val 
     elif custom_reward_type == "linear":
-        probs = s*a*match_probabilities
+        real_s = np.array([1 if s[i] in active_states else 0 for i in range(len(s))])
+        probs = real_s*a*match_probabilities
         return np.sum(probs)
     else:
         raise Exception("Reward type {} not found".format(custom_reward_type))  
 
-def contextual_custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,context):
+def contextual_custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,active_states,context):
     """Custom defined submodular reward which is maximized by
         each policy
     
@@ -404,10 +408,11 @@ def contextual_custom_reward(s,a,match_probabilities,custom_reward_type,reward_p
     Returns: Float, reward"""
     if custom_reward_type == "probability_context":
         new_match_probabilities = context
-        probs = s*a*new_match_probabilities
+        real_s = np.array([1 if s[i] in active_states else 0 for i in range(len(s))])
+        probs = real_s*a*new_match_probabilities
         return 1-np.prod(1-probs)
     else:
-        return custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters)
+        return custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,active_states)
 
 
 def partition_volunteers(probs_by_num,num_by_section):
@@ -496,7 +501,7 @@ def shapley_index_custom(env,state,memoizer_shapley = {},idx=-1):
     scores = []
     for i in range(num_random_combos):
         combo = combinations[i]
-        scores.append(custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters))
+        scores.append(custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states))
 
     scores = np.array(scores)
 
@@ -508,14 +513,14 @@ def shapley_index_custom(env,state,memoizer_shapley = {},idx=-1):
             i = idx 
             if combo[i] == 0:
                 action[i] = 1
-                shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
+                shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states) - scores[j]
                 num_by_shapley_index[i] += 1
                 action[i] = 0
         else:
             for i in range(len(state)):
                 if combo[i] == 0:
                     action[i] = 1
-                    shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters) - scores[j]
+                    shapley_indices[i] += custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states) - scores[j]
                     num_by_shapley_index[i] += 1
                     action[i] = 0
     
@@ -563,7 +568,7 @@ def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1
     scores = []
     for i in range(num_random_combos):
         combo = combinations[i]
-        scores.append(contextual_custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,context))
+        scores.append(contextual_custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context))
 
     scores = np.array(scores)
 
@@ -575,7 +580,7 @@ def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1
             i = idx 
             if combo[i] == 0:
                 action[i] = 1
-                new_reward = contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,context)
+                new_reward = contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context)
                 shapley_indices[i] += new_reward - scores[j]
                 num_by_shapley_index[i] += 1
                 action[i] = 0
@@ -583,7 +588,7 @@ def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1
             for i in range(len(state)):
                 if combo[i] == 0:
                     action[i] = 1
-                    shapley_indices[i] += contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,context) - scores[j]
+                    shapley_indices[i] += contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context) - scores[j]
                     num_by_shapley_index[i] += 1
                     action[i] = 0
 
@@ -650,7 +655,7 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled,context):
     scores = []
     for i in range(num_random_combos):
         combo = combinations[i]
-        scores.append(contextual_custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,context))
+        scores.append(contextual_custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context))
 
     scores = np.array(scores)
 
@@ -659,7 +664,7 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled,context):
         for i in range(len(state)):
             if combo[i] == 0:
                 action[i] = 1
-                shapley_indices[i] += contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,context) - scores[j]
+                shapley_indices[i] += contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context) - scores[j]
                 num_by_shapley_index[i] += 1
                 action[i] = 0
         if time.time()-start > env.time_limit:

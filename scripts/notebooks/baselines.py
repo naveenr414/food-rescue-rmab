@@ -38,21 +38,21 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 44
-    n_arms      = 10
+    seed        = 43
+    n_arms      = 4
     volunteers_per_arm = 1
-    budget      = 5
+    budget      = 2
     discount    = 0.9
     alpha       = 3 
     n_episodes  = 5
-    episode_len = 50 
+    episode_len = 50
     n_epochs    = 1
     save_with_date = False 
-    lamb = 0.5
-    prob_distro = 'uniform'
+    lamb = 0
+    prob_distro = 'uniform_context'
     reward_type = "probability_context"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1}
-    out_folder = 'iterative'
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1, 'recovery_rate': 0.1}
+    out_folder = 'journal_results/two_timestep'
     time_limit = 100
     run_rate_limits = False 
 else:
@@ -67,6 +67,7 @@ else:
     parser.add_argument('--alpha',          '-a', help='alpha: for conf radius', type=float, default=3)
     parser.add_argument('--lamb',          '-l', help='lambda for matching-engagement tradeoff', type=float, default=0.5)
     parser.add_argument('--universe_size', help='For set cover, total num unvierse elems', type=int, default=10)
+    parser.add_argument('--recovery_rate', help='How fast volunteers recover', type=float, default=0.1)
     parser.add_argument('--arm_set_low', help='Least size of arm set, for set cover', type=float, default=3)
     parser.add_argument('--arm_set_high', help='Largest size of arm set, for set cover', type=float, default=6)
     parser.add_argument('--reward_type',          '-r', help='Which type of custom reward', type=str, default='set_cover')
@@ -94,9 +95,11 @@ else:
     out_folder = args.out_folder
     reward_type = args.reward_type
     run_rate_limits = args.run_rate_limits
+    recovery_rate = args.recovery_rate 
     reward_parameters = {'universe_size': args.universe_size,
                         'arm_set_low': args.arm_set_low, 
-                        'arm_set_high': args.arm_set_high}
+                        'arm_set_high': args.arm_set_high, 
+                        'recovery_rate': args.recovery_rate}
     time_limit = args.time_limit 
 
 save_name = secrets.token_hex(4)  
@@ -119,6 +122,7 @@ results['parameters'] = {'seed'      : seed,
         'arm_set_low': reward_parameters['arm_set_low'], 
         'arm_set_high': reward_parameters['arm_set_high'],
         'time_limit': time_limit, 
+        'recovery_rate': reward_parameters['recovery_rate']
         } 
 
 # ## Index Policies

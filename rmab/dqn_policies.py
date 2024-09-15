@@ -195,7 +195,7 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
 
     past_states.append(state)
     past_actions.append(action)
-    rew = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters,env.context)
+    rew = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters,env.active_states,env.context)
 
     past_rewards.append(rew)
 
@@ -364,7 +364,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     for _ in range(budget):
         past_final_actions.append(final_action)
 
-    rew = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters,env.context)
+    rew = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters,env.active_states,env.context)
 
     for i in range(budget):
         past_rewards.append(rew)
