@@ -39,20 +39,20 @@ is_jupyter = 'ipykernel' in sys.modules
 # +
 if is_jupyter: 
     seed        = 43
-    n_arms      = 4
+    n_arms      = 10
     volunteers_per_arm = 1
-    budget      = 2
-    discount    = 0.9
+    budget      = 5
+    discount    = 0.9999
     alpha       = 3 
     n_episodes  = 5
-    episode_len = 50
+    episode_len = 50000
     n_epochs    = 1
     save_with_date = False 
     lamb = 0
-    prob_distro = 'uniform_context'
-    reward_type = "probability_context"
+    prob_distro = 'two_timescale'
+    reward_type = "probability"
     reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1, 'recovery_rate': 0.1}
-    out_folder = 'journal_results/two_timestep'
+    out_folder = 'journal_results/contextual'
     time_limit = 100
     run_rate_limits = False 
 else:
@@ -135,7 +135,6 @@ policy = greedy_policy
 name = "greedy"
 print(name)
 
-
 rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
@@ -199,7 +198,7 @@ results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
 print(np.mean(rewards['reward']))
 # -
 
-if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type:
+if 'context' in reward_type and n_arms * volunteers_per_arm <= 250:
     policy = fast_contextual_whittle_policy
     name = "fast_contextual_whittle"
 

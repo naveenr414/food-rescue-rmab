@@ -22,9 +22,10 @@ do
                     budget=$(printf "%.0f" $budget)
 
                     prob_distro=${prob_distro}
-                    reward_type=probability_multi_state
+                    reward_type=probability
 
-                    tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --lamb 0.5 --budget ${budget} --reward_type ${reward_type} --discount 0.9999 --arm_set_low 0 --arm_set_high 1 --prob_distro ${prob_distro} --episode_len 1250 --n_episodes 5 --lamb 0 --out_folder journal_results/multi_state --recovery_rate ${recovery_rate}" ENTER
+                    echo ${recovery_rate} ${prob_distro} ${seed}
+                    tmux send-keys -t match_${session} "conda activate food; python all_policies.py --seed ${seed} --volunteers_per_arm 1 --n_arms ${n_arms} --budget ${budget} --reward_type ${reward_type} --discount 0.9999 --arm_set_low 0 --arm_set_high 1 --prob_distro ${prob_distro} --episode_len 1250 --n_episodes 5 --lamb 0 --out_folder journal_results/multi_state --recovery_rate ${recovery_rate} 2>&1 | tee ../../runs/multi_state/${seed}_${recovery_rate}_${prob_distro}.txt" ENTER
                 done 
             done 
         done 

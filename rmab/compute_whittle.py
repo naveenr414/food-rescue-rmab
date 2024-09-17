@@ -100,8 +100,14 @@ def fast_compute_whittle_indices(transitions,rewards,discount):
     R0 = rewards[:,0]
     R1 = rewards[:,1]
     model = bandit.restless_bandit_from_P0P1_R0R1(P0,P1,R0,R1)
-    library_comp = model.whittle_indices(discount=discount,check_indexability=False)
-    
+
+    try:
+        library_comp = model.whittle_indices(discount=discount,check_indexability=False)
+    except Exception as e: 
+        print("Error in Whittle {}".format(e))
+        library_comp = [-1 for i in range(len(R1))]
+
+
     return library_comp 
 
 def get_init_bounds(transitions,lamb=0):

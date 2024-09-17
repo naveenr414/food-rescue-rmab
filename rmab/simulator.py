@@ -5,7 +5,6 @@ from rmab.fr_dynamics import *
 import json 
 from rmab.utils import custom_reward, contextual_custom_reward
 from rmab.baseline_policies import random_policy
-import random
 import torch 
 from itertools import combinations
 import time 
@@ -191,7 +190,7 @@ class RMABSimulator(gym.Env):
 
     def get_random_context(self):
         if self.contextual_prob is None:
-            return [random.random() for i in range(len(self.match_probability_list))]
+            return [np.random.random() for i in range(len(self.match_probability_list))]
         else:
             return self.contextual_prob[np.random.choice(self.contextual_prob.shape[0])][self.cohort_idx]
 
@@ -205,7 +204,7 @@ class RMABSimulator(gym.Env):
 
         if 'two_timescale' in self.prob_distro:
             n_states = self.transitions[0].shape[0]
-            
+
             should_global_transit = np.random.random()<self.transitions[0,0,0,n_states//2] and np.max(self.states)<n_states//2
             for i in range(self.cohort_size):
                 for j in range(self.volunteers_per_arm):
@@ -400,6 +399,7 @@ def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_e
 
             if t == T-test_T:
                 np.random.seed(seed)
+                random.seed(seed)
                 start = time.time()
 
             if t < (T-test_T):
@@ -480,7 +480,11 @@ def get_contextual_probabilities(all_population_size):
     probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
     donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
     probs_by_num = {}
-    for i in rescues_by_user:
+    user_order = list(rescues_by_user.keys())
+    user_order = [i for i in user_order if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3]
+    user_order = sorted(user_order)
+
+    for i in user_order:
         if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
             if len(rescues_by_user[i]) not in probs_by_num:
                 probs_by_num[len(rescues_by_user[i])] = []
@@ -491,6 +495,9 @@ def get_contextual_probabilities(all_population_size):
         if len(rescues_by_user[i]) not in num_rescues_per_id:
             num_rescues_per_id[len(rescues_by_user[i])] = []
         num_rescues_per_id[len(rescues_by_user[i])].append(i)    
+
+    for i in num_rescues_per_id:
+        num_rescues_per_id[i] = sorted(num_rescues_per_id[i])
 
     partitions = partition_volunteers(probs_by_num,100)
     all_user_ids = []
@@ -504,7 +511,7 @@ def get_contextual_probabilities(all_population_size):
         return get_match_probs(rescue,user_ids,rf[0],donation_id_to_latlon, recipient_location_to_latlon, user_id_to_latlon, rescues_by_user)[0] 
 
     def get_average_match_probs(user_ids,all_rescue_data):
-        sample = random.sample(all_rescue_data,100)
+        sample = np.random.choice(all_rescue_data,100)
 
         match_probs = [get_random_match_probs(user_ids,i) for i in sample]
         match_probs = np.array(match_probs)
@@ -653,60 +660,7 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
 
         best_state = 5
         worst_state = 0
-        # transition_decay_rates = np.array([0.001,0.005,0.02])*0.1# np.array([0.011738983315546994,0.014784351492750982,0.019079101486243786])
-        # global_rate = 1/20
-        # intervals = [0,50,100]
-
-        # all_population_size = 100 
-        # n_states = 12
-        # active_states = [3,4,5]
-        # all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
-
-        # for i in range(len(probs_by_partition)):
-        #     for j in range(len(probs_by_partition[i])):
-        #         probs_by_partition[i][j] = 0.02+np.random.random()/100
-
-        # initial_prob = np.zeros((all_population_size,n_states))
-        # initial_prob[:,-1] = 1
-
-        # all_transitions = np.zeros((all_population_size,n_states,2,n_states))
-        # all_transitions[:,0,:,6] = global_rate 
-        # all_transitions[:,0,:,0] = 1-global_rate 
-
-        # all_transitions[:,1,:,6] = global_rate 
-        # all_transitions[:,1,:,1] = 1-global_rate 
-
-        # all_transitions[:,2,:,6] = global_rate 
-        # all_transitions[:,2,:,2] = 1-global_rate 
-
-        # all_transitions[:,3,:,9] = global_rate 
-        # all_transitions[:,3,0,3] = (1-global_rate)
-        # all_transitions[:,3,1,3] = (1-global_rate)*(1-1/(intervals[1]-intervals[0]))
-        # all_transitions[:,3,1,4] = (1-global_rate)*(1/(intervals[1]-intervals[0]))
-
-        # all_transitions[:,4,:,10] = global_rate 
-        # all_transitions[:,4,0,4] = (1-global_rate)
-        # all_transitions[:,4,1,4] = (1-global_rate)*(1-1/(intervals[1]-intervals[0]))
-        # all_transitions[:,4,1,5] = (1-global_rate)*(1/(intervals[2]-intervals[1]))
-
-        # all_transitions[:,5,:,11] = global_rate 
-        # all_transitions[:,5,:,5] = (1-global_rate)
-
-        # all_transitions[:,6,:,0] = 1
-        # all_transitions[:,7,:,1] = 1
-        # all_transitions[:,8,:,2] = 1
-
-        # all_transitions[:,9,:,0] = transition_decay_rates[0]
-        # all_transitions[:,9,:,3] = 1-transition_decay_rates[0]
-
-        # all_transitions[:,10,:,0] = transition_decay_rates[1]
-        # all_transitions[:,10,:,3] = 1-transition_decay_rates[1]
-
-        # all_transitions[:,11,:,0] = transition_decay_rates[2]
-        # all_transitions[:,11,:,3] = 1-transition_decay_rates[2]
-
-        # best_state = 3
-        # worst_state = 0
+        
     elif "multi_state" in prob_distro:
         active_states = [1,2,3,4] 
         n_states = 5
@@ -720,7 +674,11 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
         probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
         donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
         probs_by_num = {}
-        for i in rescues_by_user:
+        user_order = list(rescues_by_user.keys())
+        user_order = [i for i in user_order if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3]
+        user_order = sorted(user_order)
+
+        for i in user_order:
             if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
                 if len(rescues_by_user[i]) not in probs_by_num:
                     probs_by_num[len(rescues_by_user[i])] = []
@@ -732,7 +690,7 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
         burnout_by_partition = []
         for i in range(len(partitions)):
             current_burnout = np.array([0.0 for i in range(len(intervals))])
-            total_probs = sum([len(probs_by_num[j]) for j in partitions[i]])
+            total_probs = sum([len(probs_by_num[j]) for j in partitions[i] if str(j) in all_burnout_rates])
             for j in partitions[i]:
                 if str(j) in all_burnout_rates:
                     j_burnout = all_burnout_rates[str(j)][::-1]
@@ -785,20 +743,22 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
         n_states = 16
         all_population_size = 100
         all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
-        alpha = 0.4
 
         initial_prob = np.zeros((all_population_size,n_states))
         initial_prob[:,-1] = 1
-
-        probs_increase = np.array([0.22946175637393768,0.23736263736263735,0.27431906614785995,0.24829931972789115])
+        
         global_rate = 1/1250
 
         probs_decrease = np.array([0,1/50,1/40,0.1])
-        all_burnout_rates = json.load(open('../../results/food_rescue/all_burnout_rates.json'))
         probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
-        donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
+        _,_, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
         probs_by_num = {}
-        for i in rescues_by_user:
+
+        user_order = list(rescues_by_user.keys())
+        user_order = [i for i in user_order if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3]
+        user_order = sorted(user_order)
+
+        for i in user_order:
             if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
                 if len(rescues_by_user[i]) not in probs_by_num:
                     probs_by_num[len(rescues_by_user[i])] = []
@@ -807,31 +767,46 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
         partitions = partition_volunteers(probs_by_num,all_population_size)[:all_population_size]
         intervals = [10,50,100,1000]
 
-        burnout_by_partition = []
-        for i in range(len(partitions)):
-            current_burnout = np.array([0.0 for i in range(len(intervals))])
-            total_probs = sum([len(probs_by_num[j]) for j in partitions[i]])
-            for j in partitions[i]:
-                if str(j) in all_burnout_rates:
-                    j_burnout = all_burnout_rates[str(j)][::-1]
-                    j_burnout = np.array(j_burnout)*len(probs_by_num[j])/total_probs 
-                    current_burnout += j_burnout
-            burnout_by_partition.append(current_burnout)
-        burnout_by_partition = np.array(burnout_by_partition)
+        # all_burnout_rates = json.load(open('../../results/food_rescue/all_burnout_rates.json'))
+        # burnout_by_partition = []
+        # for i in range(len(partitions)):
+        #     current_burnout = np.array([0.0 for i in range(len(intervals))])
+        #     total_probs = sum([len(probs_by_num[j]) for j in partitions[i] if str(j) in all_burnout_rates])
+        #     for j in partitions[i]:
+        #         if str(j) in all_burnout_rates:
+        #             j_burnout = all_burnout_rates[str(j)]
+        #             j_burnout = np.array(j_burnout)*len(probs_by_num[j])/total_probs 
+        #             current_burnout += j_burnout
+        #     burnout_by_partition.append(current_burnout)
+        # burnout_by_partition = np.array(burnout_by_partition)
 
-        all_recovery_rates = json.load(open('../../results/food_rescue/all_recovery_rates.json'))
-        recovery_by_partition = []
+        # all_recovery_rates = json.load(open('../../results/food_rescue/all_recovery_rates.json'))
+        # recovery_by_partition = []
+        # for i in range(len(partitions)):
+        #     current_recovery = np.array([0.0 for i in range(len(intervals))])
+        #     total_probs = sum([len(probs_by_num[j]) for j in partitions[i] if str(j) in all_recovery_rates])
+        #     for j in partitions[i]:
+        #         if str(j) in all_recovery_rates:
+        #             j_recovery = all_recovery_rates[str(j)]
+        #             j_recovery = [j_recovery[str(i)] for i in intervals][::-1]
+        #             j_recovery = np.array(j_recovery)*len(probs_by_num[j])/total_probs 
+        #             current_recovery += j_recovery
+        #     recovery_by_partition.append(current_recovery)
+        # recovery_by_partition = np.array(recovery_by_partition)
+
+        all_weekly_transitions = json.load(open('../../results/food_rescue/all_weekly_transitions.json'))
+        weekly_transitions_by_partition = []
         for i in range(len(partitions)):
-            current_recovery = np.array([0.0 for i in range(len(intervals))])
-            total_probs = sum([len(probs_by_num[j]) for j in partitions[i]])
+            current_transitions = np.zeros((2,len(intervals),2))
+            total_probs = sum([len(probs_by_num[j]) for j in partitions[i] if str(j) in all_weekly_transitions])
             for j in partitions[i]:
-                if str(j) in all_recovery_rates:
-                    j_recovery = all_recovery_rates[str(j)]
-                    j_recovery = [j_recovery[str(i)] for i in intervals][::-1]
-                    j_recovery = np.array(j_recovery)*len(probs_by_num[j])/total_probs 
-                    current_recovery += j_recovery
-            recovery_by_partition.append(current_recovery)
-        recovery_by_partition = np.array(recovery_by_partition)
+                if str(j) in all_weekly_transitions:
+                    weekly_transition_partition = np.array(all_weekly_transitions[str(j)])[:,::-1,:]
+                    current_transitions += weekly_transition_partition*len(probs_by_num[j])/total_probs 
+            weekly_transitions_by_partition.append(weekly_transition_partition)
+        weekly_transitions_by_partition = np.array(weekly_transitions_by_partition)
+        print("Weekly transitions by partition {}".format(weekly_transitions_by_partition.shape))
+
 
         all_transitions = np.zeros((all_population_size,n_states,2,n_states))
         all_transitions[:,0,1,0] = 1
@@ -847,7 +822,7 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
 
         all_transitions[:,3,1,2] = probs_decrease[3]
         all_transitions[:,3,1,3] = 1-probs_decrease[3]
-        all_transitions[:,3,0,3] = 1
+        all_transitions[:,3,:,3] = 1
 
         all_transitions[:,4,1,0] = burnout_by_partition[:,0]
         all_transitions[:,4,1,4] = 1-burnout_by_partition[:,0]
@@ -951,7 +926,7 @@ def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,
                 while len(temp_set) < set_sizes[i]:
                     temp_set.add(np.random.randint(0,reward_parameters['universe_size']))
                 match_probabilities.append(temp_set)
-    elif "food_rescue" in prob_distro or prob_distro == "two_timescale_context":
+    elif "food_rescue" in prob_distro or "two_timescale" in prob_distro or 'multi_state' in prob_distro:
         if prob_distro == "food_rescue_context" or prob_distro == "two_timescale_context":
             if len(probs_by_partition) == 102 and os.path.exists("../../results/food_rescue/match_probs_102.pkl"):
                 contextual_probs = pickle.load(open("../../results/food_rescue/contextual_probs_102.pkl","rb"))
@@ -965,7 +940,6 @@ def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,
             match_probabilities = json.load(open("../../results/food_rescue/two_step_match_probs.json"))
             expanded_array = np.expand_dims(match_probabilities, axis=0)  # Shape becomes (1, 40, 2, 40)
             match_probabilities = np.tile(expanded_array, (1000, 1))  # Shape becomes (100, 40, 2, 40)
-
         else:
             match_probabilities = [np.random.choice(probs_by_partition[i//volunteers_per_arm]) for i in range(N)] 
     elif prob_distro == "uniform_context":
@@ -1002,14 +976,16 @@ def create_environment(parameters,max_transition_prob=0.25):
     n_episodes = parameters['n_episodes']
     budget = parameters['budget']
 
-    all_transitions,probs_by_partition, n_states,initial_prob, best_state, worst_state,active_states = create_transitions_from_prob(prob_distro,seed,parameters['recovery_rate'],max_transition_prob=max_transition_prob)
-    all_population_size = len(all_transitions)
-
     random.seed(seed)
     np.random.seed(seed)
 
+    all_transitions,probs_by_partition, n_states,initial_prob, best_state, worst_state,active_states = create_transitions_from_prob(prob_distro,seed,parameters['recovery_rate'],max_transition_prob=max_transition_prob)
+    all_population_size = len(all_transitions)
+
     all_features = np.arange(all_population_size)
     N = all_population_size*volunteers_per_arm
+    random.seed(seed)
+    np.random.seed(seed)
     contextual_prob, match_probabilities = get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,
                                         parameters['volunteers_per_arm'])
     simulator = RMABSimulator(all_population_size, all_features, all_transitions,
@@ -1118,11 +1094,12 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
 
         time_whittle = simulator.time_taken
 
+
         if parameters['prob_distro'] == 'food_rescue_two_timestep' or parameters['prob_distro'] == 'food_rescue_two_timestep_quick' or parameters['prob_distro'] == 'food_rescue_two_timestep_2' or 'multi_state' in parameters['prob_distro'] or 'two_timescale' in parameters['prob_distro']:
             discounted_reward = get_average_reward(match,active_rate,parameters['discount'],parameters['lamb'])    
         else:
             discounted_reward = get_discounted_reward(match,active_rate,parameters['discount'],parameters['lamb'])
-        
+
         scores['reward'].append(discounted_reward)
         scores['time'].append(time_whittle)
         scores['match'].append(np.mean(match))
