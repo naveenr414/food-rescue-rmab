@@ -45,13 +45,13 @@ if is_jupyter:
     discount    = 0.9999
     alpha       = 3 
     n_episodes  = 5
-    episode_len = 50000
+    episode_len = 5000
     n_epochs    = 1
     save_with_date = False 
     lamb = 0
     prob_distro = 'two_timescale'
     reward_type = "probability"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1, 'recovery_rate': 0.1}
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1, 'recovery_rate': 0}
     out_folder = 'journal_results/contextual'
     time_limit = 100
     run_rate_limits = False 
@@ -233,9 +233,10 @@ if n_arms * volunteers_per_arm <= 1000:
     results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type and 'two_timescale' not in prob_distro:
+if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type and episode_len<=10000:
     policy = fast_contextual_shapley_policy
     name = "fast_contextual_shapley"
+    print(name)
 
     rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
     results['{}_reward'.format(name)] = rewards['reward']
@@ -255,9 +256,10 @@ if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type and 'two_time
     results['{}_time'.format(name)] =  rewards['time']
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 250 and 'two_timescale' not in prob_distro and 'multi_state' not in prob_distro:
+if n_arms * volunteers_per_arm <= 250 and episode_len<=10000:
     policy = whittle_iterative_policy
     name = "iterative_whittle"
+    print(name)
 
     rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
     results['{}_reward'.format(name)] = rewards['reward']
@@ -282,9 +284,10 @@ if n_arms * volunteers_per_arm <= 250 and 'two_timescale' not in prob_distro and
     print(np.mean(rewards['reward']))
 
 
-if n_arms * volunteers_per_arm <= 25 and 'two_timescale' not in prob_distro and 'multi_state' not in prob_distro:
+if n_arms * volunteers_per_arm <= 25 and reward_type != 'probability_context' and episode_len<=10000:
     policy = shapley_whittle_iterative_policy
     name = "shapley_iterative_whittle"
+    print(name)
 
     rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50),shapley_iterations=1000)
     results['{}_reward'.format(name)] = rewards['reward']

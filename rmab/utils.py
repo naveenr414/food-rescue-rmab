@@ -295,7 +295,7 @@ def one_hot_fixed(index,length,fixed):
     return s
 
 
-def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,active_states):
+def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,active_states,state_as_num=None):
     """Custom defined submodular reward which is maximized by
         each policy
     
@@ -308,6 +308,9 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,a
             The set corresponding to each arm
     
     Returns: Float, reward"""
+
+    if state_as_num is None:
+        state_as_num = np.array([1 if s[i] in active_states else 0 for i in range(len(s))])
 
     if custom_reward_type == "set_cover":
         num_elements = reward_parameters['universe_size']
@@ -336,9 +339,8 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,a
         else:
             return np.min(val_probs) 
     elif custom_reward_type == "probability":
-        real_s = np.array([1 if s[i] in active_states else 0 for i in range(len(s))])
-        probs = real_s*a*match_probabilities
-        return 1-np.prod(1-probs)
+        probs = state_as_num * a * match_probabilities
+        return 1 - np.prod(1 - probs)
     elif custom_reward_type == "probability_context":
         probs = s*a*match_probabilities
         return 1-np.prod(1-probs)
@@ -393,7 +395,7 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,a
     else:
         raise Exception("Reward type {} not found".format(custom_reward_type))  
 
-def contextual_custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,active_states,context):
+def contextual_custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,active_states,context,state_as_num=None):
     """Custom defined submodular reward which is maximized by
         each policy
     
@@ -406,13 +408,15 @@ def contextual_custom_reward(s,a,match_probabilities,custom_reward_type,reward_p
             The set corresponding to each arm
     
     Returns: Float, reward"""
+    if state_as_num is None:
+        state_as_num = np.array([1 if s[i] in active_states else 0 for i in range(len(s))])
+
     if custom_reward_type == "probability_context":
         new_match_probabilities = context
-        real_s = np.array([1 if s[i] in active_states else 0 for i in range(len(s))])
-        probs = real_s*a*new_match_probabilities
+        probs = state_as_num*a*new_match_probabilities
         return 1-np.prod(1-probs)
     else:
-        return custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,active_states)
+        return custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,active_states,state_as_num=state_as_num)
 
 
 def partition_volunteers(probs_by_num,num_by_section):
@@ -475,7 +479,7 @@ def shapley_index_custom(env,state,memoizer_shapley = {},idx=-1):
     Returns: Two things, shapley index, and updated dictionary"""
 
     shapley_indices = [0 for i in range(len(state))]
-    state_str = "".join([str(i) for i in state])
+    state_str = " ".join([str(i) for i in state])
     if state_str in memoizer_shapley:
         return memoizer_shapley[state_str], memoizer_shapley
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
@@ -542,9 +546,14 @@ def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1
         memoizer_shapley: Dictionary, to store previously computed Shapley indices
         
     Returns: Two things, shapley index, and updated dictionary"""
+    start = time.time()
+    state_as_num = np.array([int(i in env.active_states) for i in state])
 
+    start = time.time()
     shapley_indices = [0 for i in range(len(state))]
-    state_str = "".join([str(i) for i in state])
+    state_str = " ".join([str(i) for i in state])
+    if "context" in env.reward_type:
+        state_str+=str(context)
     match_probabilities = np.array(env.match_probability_list)[env.agent_idx]
     corresponding_probabilities = match_probabilities
     num_random_combos = env.shapley_iterations 
@@ -559,39 +568,54 @@ def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1
     budget_probs = np.array([scipy.special.comb(len(corresponding_probabilities),k) for k in range(0,budget)])
     budget_probs /= np.sum(budget_probs)
 
+    chosen_indices = random.choices(list(range(len(budget_probs))), weights=budget_probs, k=num_random_combos)
+    # Then, generate random samples for ones_indices
     for i in range(num_random_combos):
-        k = random.choices(list(range(len(budget_probs))), weights=budget_probs,k=1)[0]
-        ones_indices = random.sample(list(range(len(corresponding_probabilities))),k)
+        k = chosen_indices[i]
+        ones_indices = random.sample(list(range(len(corresponding_probabilities))), k)
         combinations[i, ones_indices] = 1
-
     state = [int(i) for i in state]
-    scores = []
-    for i in range(num_random_combos):
-        combo = combinations[i]
-        scores.append(contextual_custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context))
+    scores = np.zeros(num_random_combos)
 
-    scores = np.array(scores)
+    start = time.time() 
+    if env.reward_type == "probability_context":
+        scores = 1-np.prod(1-state_as_num*combinations*corresponding_probabilities,axis=1)
+    else:
+        for i in range(num_random_combos):
+            if idx != -1 and combinations[i,idx] == 1:
+                continue  
+            scores[i] = contextual_custom_reward(state,combinations[i],corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context,state_as_num=state_as_num)
+        scores = np.array(scores)
 
+
+    start = time.time()
     num_by_shapley_index = np.zeros(len(state))
-    for j,combo in enumerate(combinations):
-        action = deepcopy(combo) 
 
-        if idx != -1:
-            i = idx 
-            if combo[i] == 0:
-                action[i] = 1
-                new_reward = contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context)
-                shapley_indices[i] += new_reward - scores[j]
-                num_by_shapley_index[i] += 1
-                action[i] = 0
-        else:
-            for i in range(len(state)):
+    if idx!=-1 and env.reward_type == "probability_context":
+        num_by_shapley_index[idx] = np.sum(combinations[:,idx])
+        combinations[:,idx] = 1
+        new_scores = 1-np.prod(1-state_as_num*combinations*corresponding_probabilities,axis=1)
+        shapley_indices[idx] = np.sum(new_scores)-np.sum(scores)
+        return shapley_indices[idx]/num_by_shapley_index[idx]
+    else:
+        for j,combo in enumerate(combinations):
+            action = combo
+
+            if idx != -1:
+                i = idx 
                 if combo[i] == 0:
                     action[i] = 1
-                    shapley_indices[i] += contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context) - scores[j]
+                    new_reward = contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context,state_as_num=state_as_num)
+                    shapley_indices[i] += new_reward - scores[j]
                     num_by_shapley_index[i] += 1
                     action[i] = 0
-
+            else:
+                for i in range(len(state)):
+                    if combo[i] == 0:
+                        action[i] = 1
+                        shapley_indices[i] += contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context,state_as_num=state_as_num) - scores[j]
+                        num_by_shapley_index[i] += 1
+                        action[i] = 0
     if idx != -1:
         return shapley_indices[i]/num_by_shapley_index[i]
     shapley_indices /= num_by_shapley_index
@@ -614,8 +638,11 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled,context):
         
     Returns: Two things, shapley index, and updated dictionary"""
 
+    start = time.time()
     shapley_indices = [0 for i in range(len(state))]
-    state_str = "".join([str(i) for i in state])
+    state_str = " ".join([str(i) for i in state])
+    if "context" in env.reward_type:
+        state_str+=str(context)
 
     if state_str in memoizer_shapley:
         return memoizer_shapley[state_str], memoizer_shapley
@@ -649,27 +676,33 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled,context):
         combinations[i,arms_pulled] = 1
 
     state = [int(i) for i in state]
+    state_as_num = np.array([int(i in env.active_states) for i in state])
 
     num_by_shapley_index = np.zeros(len(state))
-    start = time.time() 
-    scores = []
-    for i in range(num_random_combos):
-        combo = combinations[i]
-        scores.append(contextual_custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context))
+    if env.reward_type == "probability_context":
+        scores = 1-np.prod(1-state_as_num*combinations*corresponding_probabilities,axis=1)
+    else:
+        scores = []
+        for i in range(num_random_combos):
+            combo = combinations[i]
+            scores.append(contextual_custom_reward(state,combo,corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context))
 
     scores = np.array(scores)
-
-    for j,combo in enumerate(combinations):
-        action = deepcopy(combo) 
+    idx = 0
+    for j, combo in enumerate(combinations):
+        action = np.array(combo)  # Avoid deepcopy, make a direct copy (lightweight)
         for i in range(len(state)):
             if combo[i] == 0:
                 action[i] = 1
-                shapley_indices[i] += contextual_custom_reward(state,np.array(action),corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context) - scores[j]
+                idx += 1
+
+                reward_diff = contextual_custom_reward(state, action, corresponding_probabilities, 
+                                                    env.reward_type, env.reward_parameters, 
+                                                    env.active_states, context,state_as_num=state_as_num) - scores[j]
+                shapley_indices[i] += reward_diff
                 num_by_shapley_index[i] += 1
-                action[i] = 0
-        if time.time()-start > env.time_limit:
-            break 
-    
+                action[i] = 0  # Toggle back to 0
+
     for i in range(len(shapley_indices)):
         if num_by_shapley_index[i] > 0:
             shapley_indices[i] /= num_by_shapley_index[i] 
@@ -677,7 +710,7 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled,context):
             shapley_indices[i] = 0
     memoizer_shapley[state_str] = shapley_indices
 
-    return shapley_indices, memoizer_shapley
+    return np.array(shapley_indices), memoizer_shapley
 
 def compute_u_matrix(env,N,n_states):
     u_matrix = np.zeros((N,n_states))

@@ -389,6 +389,7 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
 def run_mcts(env,Q_multi_prob_list, p_matrix,whittle_matrix,budget,state,lamb,contextual=True):
     """Boilerplate for running the MCTS method"""
     
+    start = time.time() 
     N = len(state)
     s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,env.match_probability_list[env.agent_idx],budget,env,shapley=False,p_matrix=p_matrix)
     s.contextual=contextual
@@ -425,8 +426,8 @@ def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setu
     n_states = env.transitions.shape[1] 
 
     if memory == None:
+        start = time.time()
         p_matrix = compute_p_matrix(env,N) 
-
         Q_multi_prob_list = np.zeros((N,n_states,2))
 
         for i in range(N):

@@ -93,12 +93,17 @@ def arm_value_iteration(transitions, state, predicted_subsidy, discount, thresho
     """
     return np.argmax(get_q_vals(transitions,state,predicted_subsidy,discount,threshold,reward_function=reward_function,lamb=lamb,p_values=p_values,num_arms=num_arms,active_states=active_states))
 
-def fast_compute_whittle_indices(transitions,rewards,discount):
+def fast_compute_whittle_indices(transitions,rewards,discount,computed_values={}):
     import markovianbandit as bandit
     P0 = transitions[:,0,:]
     P1 = transitions[:,1,:]
     R0 = rewards[:,0]
     R1 = rewards[:,1]
+
+    represent = "{}{}{}{}".format(hash(P0.tostring()),hash(P1.tostring()),hash(R0.tostring()),hash(R1.tostring()))
+    if represent in computed_values:
+        return computed_values[represent]
+
     model = bandit.restless_bandit_from_P0P1_R0R1(P0,P1,R0,R1)
 
     try:
@@ -107,7 +112,7 @@ def fast_compute_whittle_indices(transitions,rewards,discount):
         print("Error in Whittle {}".format(e))
         library_comp = [-1 for i in range(len(R1))]
 
-
+    computed_values[represent] = library_comp 
     return library_comp 
 
 def get_init_bounds(transitions,lamb=0):

@@ -662,7 +662,7 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
         worst_state = 0
         
     elif "multi_state" in prob_distro:
-        active_states = [1,2,3,4] 
+        active_states = set([1,2,3,4]) 
         n_states = 5
         all_population_size = 100
         all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
@@ -739,6 +739,7 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
         worst_state = 0
 
     elif 'two_timescale' in prob_distro:
+        start = time.time()
         active_states = [4,5,6,7]
         n_states = 16
         all_population_size = 100
@@ -767,33 +768,6 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
         partitions = partition_volunteers(probs_by_num,all_population_size)[:all_population_size]
         intervals = [10,50,100,1000]
 
-        # all_burnout_rates = json.load(open('../../results/food_rescue/all_burnout_rates.json'))
-        # burnout_by_partition = []
-        # for i in range(len(partitions)):
-        #     current_burnout = np.array([0.0 for i in range(len(intervals))])
-        #     total_probs = sum([len(probs_by_num[j]) for j in partitions[i] if str(j) in all_burnout_rates])
-        #     for j in partitions[i]:
-        #         if str(j) in all_burnout_rates:
-        #             j_burnout = all_burnout_rates[str(j)]
-        #             j_burnout = np.array(j_burnout)*len(probs_by_num[j])/total_probs 
-        #             current_burnout += j_burnout
-        #     burnout_by_partition.append(current_burnout)
-        # burnout_by_partition = np.array(burnout_by_partition)
-
-        # all_recovery_rates = json.load(open('../../results/food_rescue/all_recovery_rates.json'))
-        # recovery_by_partition = []
-        # for i in range(len(partitions)):
-        #     current_recovery = np.array([0.0 for i in range(len(intervals))])
-        #     total_probs = sum([len(probs_by_num[j]) for j in partitions[i] if str(j) in all_recovery_rates])
-        #     for j in partitions[i]:
-        #         if str(j) in all_recovery_rates:
-        #             j_recovery = all_recovery_rates[str(j)]
-        #             j_recovery = [j_recovery[str(i)] for i in intervals][::-1]
-        #             j_recovery = np.array(j_recovery)*len(probs_by_num[j])/total_probs 
-        #             current_recovery += j_recovery
-        #     recovery_by_partition.append(current_recovery)
-        # recovery_by_partition = np.array(recovery_by_partition)
-
         all_weekly_transitions = json.load(open('../../results/food_rescue/all_weekly_transitions.json'))
         weekly_transitions_by_partition = []
         for i in range(len(partitions)):
@@ -805,8 +779,6 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
                     current_transitions += weekly_transition_partition*len(probs_by_num[j])/total_probs 
             weekly_transitions_by_partition.append(weekly_transition_partition)
         weekly_transitions_by_partition = np.array(weekly_transitions_by_partition)
-        print("Weekly transitions by partition {}".format(weekly_transitions_by_partition.shape))
-
 
         all_transitions = np.zeros((all_population_size,n_states,2,n_states))
         all_transitions[:,0,1,0] = 1
@@ -822,25 +794,20 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
 
         all_transitions[:,3,1,2] = probs_decrease[3]
         all_transitions[:,3,1,3] = 1-probs_decrease[3]
-        all_transitions[:,3,:,3] = 1
+        all_transitions[:,3,0,3] = 1
 
-        all_transitions[:,4,1,0] = burnout_by_partition[:,0]
-        all_transitions[:,4,1,4] = 1-burnout_by_partition[:,0]
-        all_transitions[:,4,0,4] = 1
+        all_transitions[:,4,:,4] = 1
 
-        all_transitions[:,5,1,0] = burnout_by_partition[:,1]
         all_transitions[:,5,1,4] = probs_decrease[1]
-        all_transitions[:,5,1,5] = 1-burnout_by_partition[:,1]-probs_decrease[1]
+        all_transitions[:,5,1,5] = 1-probs_decrease[1]
         all_transitions[:,5,0,5] = 1
 
-        all_transitions[:,6,1,0] = burnout_by_partition[:,2]
         all_transitions[:,6,1,5] = probs_decrease[2]
-        all_transitions[:,6,1,6] = 1-burnout_by_partition[:,2]-probs_decrease[2]
+        all_transitions[:,6,1,6] = 1-probs_decrease[2]
         all_transitions[:,6,0,6] = 1
 
-        all_transitions[:,7,1,0] = burnout_by_partition[:,3]
         all_transitions[:,7,1,6] = probs_decrease[3]
-        all_transitions[:,7,1,7] = 1-burnout_by_partition[:,3]-probs_decrease[3]
+        all_transitions[:,7,1,7] = 1-probs_decrease[3]
         all_transitions[:,7,0,7] = 1
 
         all_transitions *= (1-global_rate)
@@ -853,23 +820,17 @@ def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_p
         all_transitions[:,6,:,14] = global_rate 
         all_transitions[:,7,:,15] = global_rate 
 
-        for a in range(2):
-            all_transitions[:,8,a,7] = recovery_by_partition[:,0]
-            all_transitions[:,8,a,3] = 1-recovery_by_partition[:,0]
-            all_transitions[:,9,a,7] = recovery_by_partition[:,1]
-            all_transitions[:,9,a,3] = 1-recovery_by_partition[:,1]
-            all_transitions[:,10,a,7] = recovery_by_partition[:,2]
-            all_transitions[:,10,a,3] = 1-recovery_by_partition[:,2]
-            all_transitions[:,11,a,7] = recovery_by_partition[:,3]
-            all_transitions[:,11,a,3] = 1-recovery_by_partition[:,3]
 
-
-        all_transitions[:,12,:,7] = 1
-        all_transitions[:,13,:,7] = 1
-        all_transitions[:,14,:,7] = 1
-        all_transitions[:,15,:,7] = 1
+        for num_notifications in range(4):
+            for start_engagement in range(2):
+                for end_engagement in range(2):
+                    for a in range(2):
+                        start_state = 8+start_engagement*4+num_notifications
+                        end_state = 4*end_engagement+3
+                        all_transitions[:,start_state,a,end_state] = weekly_transitions_by_partition[:,start_engagement,num_notifications,end_engagement]
         best_state = 7
         worst_state = 0
+
 
     elif prob_distro == "food_rescue_top":
         all_population_size = 20 

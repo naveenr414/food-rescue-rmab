@@ -6,8 +6,9 @@ from rmab.utils import Memoizer, contextual_custom_reward, binary_to_decimal, cu
 from rmab.compute_whittle import arm_value_iteration_exponential, fast_arm_compute_whittle, fast_arm_compute_whittle_multi_prob, arm_compute_whittle, arm_compute_whittle_multi_prob, fast_compute_whittle_indices
 from rmab.baseline_policies import compute_reward_matrix, compute_p_matrix
 
-from copy import deepcopy
+from copy import deepcopy, copy
 import random 
+import time 
 
 
 
@@ -140,12 +141,13 @@ def shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_result
     return action, whittle_matrix
 
 def get_whittle_function(contextual):
-    def run_function(env,state,N,pulled_arms):
+    def run_function(env,state,N,pulled_arms,shapley_memoizer):
         return whittle_match_prob_now(env,state,N,pulled_arms,contextual=contextual)
 
     return run_function
 
 def whittle_match_prob_now(env,state,N,pulled_arms,contextual=True):
+    start = time.time()
     if len(pulled_arms) > 0:
         pulled_action = one_hot_fixed(pulled_arms[0],len(state),pulled_arms)
 
@@ -157,10 +159,11 @@ def whittle_match_prob_now(env,state,N,pulled_arms,contextual=True):
     else:
         pulled_action = [0 for i in range(len(state))]
         default_custom_reward = 0
-    
+    start = time.time()
+
     match_prob_all = []
     for i in range(N):
-        new_action = deepcopy(pulled_action)
+        new_action = copy(pulled_action)
         new_action[i] = 1
 
         if contextual:
@@ -169,16 +172,16 @@ def whittle_match_prob_now(env,state,N,pulled_arms,contextual=True):
             match_prob_all.append(custom_reward(state,new_action,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.active_states)-default_custom_reward)
     return match_prob_all
 
-def shapley_match_prob_now(env,state,N,pulled_arms,contextual=True):
+def shapley_match_prob_now(env,state,N,pulled_arms,shapley_memoizer,contextual=True):
     if contextual:
-        match_prob_all = np.array(shapley_index_custom_fixed(env,state,{},pulled_arms,env.context)[0])
+        match_prob_all = shapley_index_custom_fixed(env,state,shapley_memoizer,pulled_arms,env.context)[0]
     else:
-        match_prob_all = np.array(shapley_index_custom_fixed(env,state,{},pulled_arms,np.array(env.match_probability_list)[env.agent_idx])[0])
+        match_prob_all = shapley_index_custom_fixed(env,state,shapley_memoizer,pulled_arms,np.array(env.match_probability_list)[env.agent_idx])[0]
     return match_prob_all
 
 def get_shapley_function(contextual):
-    def run_function(env,state,N,pulled_arms):
-        return shapley_match_prob_now(env,state,N,pulled_arms,contextual=contextual)
+    def run_function(env,state,N,pulled_arms,shapley_memoizer={}):
+        return shapley_match_prob_now(env,state,N,pulled_arms,shapley_memoizer,contextual=contextual)
     return run_function
 
 def iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,match_prob_now_function,reward_matrix):
@@ -188,12 +191,22 @@ def iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,mat
     action = np.zeros(N, dtype=np.int8)
     pulled_arms = []
 
+    start = time.time() 
+    tot = 0
+    tot_2 = 0
+    tot_3 = 0
+    computed_values = memory[1]
+    shapley_memoizer = memory[2]
+
     for _ in range(budget):
-        match_prob_now_list = match_prob_now_function(env,state,N,pulled_arms)
+        temp = time.time()
+        match_prob_now_list = match_prob_now_function(env,state,N,pulled_arms,shapley_memoizer)
+        tot_3 += time.time()-temp
         state_WI = []
 
         for i in range(N):
             if i not in pulled_arms:
+                temp = time.time()
                 match_prob_now = match_prob_now_list[i]
                 new_transitions = np.zeros((n_states+1,2,n_states+1))
                 new_transitions[:n_states,:,:n_states] = env.transitions[i//env.volunteers_per_arm]
@@ -205,9 +218,12 @@ def iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,mat
                 if i in env.active_states:
                     new_reward_matrix[n_states] += lamb/N 
                 new_reward_matrix[n_states,1] += (1-lamb)*match_prob_now 
-                whittle_compute = fast_compute_whittle_indices(new_transitions,new_reward_matrix,env.discount)[-1]
+                tot += (time.time()-temp)
+                temp = time.time() 
+
+                whittle_compute = fast_compute_whittle_indices(new_transitions,new_reward_matrix,env.discount,computed_values=computed_values)[-1]
                 state_WI.append(whittle_compute)
-                
+                tot_2 += (time.time()-temp)
             else:
                 state_WI.append(-100) 
         state_WI = np.array(state_WI)
@@ -216,7 +232,7 @@ def iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,mat
 
         pulled_arms.append(argmax_val)
 
-    return action, (reward_matrix) 
+    return action, (reward_matrix,computed_values,shapley_memoizer) 
 
 
 def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True):
@@ -241,8 +257,11 @@ def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,cont
         p_matrix = compute_p_matrix(env,N)
         reward_matrix = compute_reward_matrix(env,N,lamb)
         reward_matrix[:,:,1] += (1-lamb)*p_matrix
+        computed_values = {}
+        shapley_memoizer = {}
+        memory = reward_matrix, computed_values, shapley_memoizer
     else:
-        reward_matrix = memory 
+        reward_matrix, computed_values, shapley_memoizer = memory 
 
     whittle_function = get_whittle_function(contextual)
 
@@ -273,11 +292,13 @@ def shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_resu
         u_matrix = compute_u_matrix(env,N,n_states)
         reward_matrix = compute_reward_matrix(env,N,lamb)
         reward_matrix[:,:,1] += (1-lamb)*u_matrix
+        computed_values = {}
+        shapley_memoizer = {}
+        memory = reward_matrix, computed_values, shapley_memoizer
     else:
-        reward_matrix = memory 
+        reward_matrix, computed_values, shapley_memoizer = memory 
 
     shapley_function = get_shapley_function(contextual)
-
 
     return iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,shapley_function,reward_matrix)
 
@@ -575,8 +596,10 @@ def fast_contextual_shapley_policy(env,state,budget,lamb,memory,per_epoch_result
 
     N = len(state) 
     n_states = env.transitions.shape[1]
+    start = time.time()
 
     if memory == None:
+        start = time.time()
         # Construct transitions of size |S|*|D|, where we get |D| samples
         num_samples = 1
 
@@ -617,15 +640,17 @@ def fast_contextual_shapley_policy(env,state,budget,lamb,memory,per_epoch_result
 
             transitions[i][-1] = transitions[i][state[i]*num_samples]
             new_reward_matrix[i,-1,1] += (1-lamb)*context_shapley_values[i,-1]
+
     else:
         new_reward_matrix, transitions = memory 
         num_samples = 1
 
         contextual_shapley_values = []
+        default_state = [env.best_state for _ in range(N)]
         for i in range(N):
-            default_state = [env.best_state for _ in range(N)]
             default_state[i] = state[i]
             contextual_shapley_values.append(shapley_index_custom_contexts(env,default_state,env.context,idx=i))
+            default_state[i] = env.best_state
 
         for i in range(N):
             transitions[i][-1] = transitions[i][state[i]*num_samples]
@@ -639,7 +664,6 @@ def fast_contextual_shapley_policy(env,state,budget,lamb,memory,per_epoch_result
     for i in range(N):        
         better_reward = deepcopy(new_reward_matrix[i])
         state_WI_value = fast_compute_whittle_indices(transitions[i],better_reward,env.discount)
-
 
         state_WI.append(state_WI_value[-1])
 
