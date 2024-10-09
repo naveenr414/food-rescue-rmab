@@ -1,9 +1,8 @@
 import numpy as np
 import random 
 
-from rmab.whittle_policies import shapley_index_custom
 from rmab.baseline_policies import random_policy, compute_p_matrix, compute_reward_matrix
-from rmab.utils import contextual_custom_reward
+from rmab.utils import contextual_custom_reward, shapley_index_custom
 from rmab.compute_whittle import Q_multi_prob, fast_compute_whittle_indices
 
 import time
