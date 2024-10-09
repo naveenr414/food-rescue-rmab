@@ -32,8 +32,8 @@ To run experiments with global restless bandits, first clone this repository
 Then to install the dependencies run the following
 ```
 $ conda env create --file environment.yaml
-$ python install -e .
-$ bash scripts/bash_scripts/create_folders.sh
+$ pip install -e .
+$ bash scripts/bash_scripts/main_scripts/create_folders.sh
 ```
 
 This will create a new environment, called `food`, from which to run the code

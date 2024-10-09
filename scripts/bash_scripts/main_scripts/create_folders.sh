@@ -6,6 +6,7 @@ mkdir results/reward_variation
 mkdir results/n_k_variation   
 mkdir results/food_rescue_policies   
 
+mkdir results/journal_results   
 mkdir results/journal_results/contextual   
 mkdir results/journal_results/multi_state   
 mkdir results/journal_results/two_timestep   
