@@ -15,25 +15,6 @@ import scipy
 import random 
 
 
-def get_stationary_distribution(P):
-    """Given a Markov Chain, P, get its stationary distribution
-    
-    Arguments: 
-        P: Square numpy array representing transition probabilities
-    
-    Returns: Vector of stationary probabilities"""
-
-    eigenvalues, eigenvectors = np.linalg.eig(P.T)  # Transpose P to find left eigenvectors
-
-    # Find the index of the eigenvalue equal to 1
-    stationary_index = np.where(np.isclose(eigenvalues, 1))[0][0]
-
-    # Get the corresponding left eigenvector
-    stationary_distribution = np.real(eigenvectors[:, stationary_index])
-    stationary_distribution /= np.sum(stationary_distribution)  # Normalize to ensure it sums to 1
-
-    return stationary_distribution
-
 def get_save_path(folder_name,result_name,seed,use_date=False):
     """Create a string, file_name, which is the name of the file to save
     
@@ -107,70 +88,6 @@ def get_results_matching_parameters(folder_name,result_name,parameters):
             load_file = json.load(open(file_name,"r"))
             ret_results.append(load_file)
     return ret_results
-
-class Memoizer:
-    """ improve performance of memoizing solutions (to QP and WI value iteration) """
-    def __init__(self, method):
-        self.method = method
-        self.solved_p_vals = {}
-
-    def to_key(self, input1, input2):
-        """ convert inputs to a key
-
-        QP: inputs: LCB and UCB transition probabilities
-        UCB and extreme: inputs - estimated transition probabilities and initial state s0 """
-        if self.method in ['lcb_ucb', 'QP', 'QP-min']:
-            lcb, ucb = input1, input2
-            p_key = (np.round(lcb, 4).tobytes(), np.round(ucb, 4).tobytes())
-        elif self.method in ['p_s', 'optimal', 'UCB', 'extreme', 'ucw_value']:
-            transitions, state = input1, input2
-            p_key = (np.round(transitions, 4).tobytes(), state)
-        elif self.method in ['lcb_ucb_s_lamb']:
-            lcb, ucb = input1
-            s, lamb_val = input2
-            p_key = (np.round(lcb, 4).tobytes(), np.round(ucb, 4).tobytes(), s, lamb_val)
-        else:
-            raise Exception(f'method {self.method} not implemented')
-
-        return p_key
-
-    def check_set(self, input1, input2):
-        p_key = self.to_key(input1, input2)
-        if p_key in self.solved_p_vals:
-            return self.solved_p_vals[p_key]
-        return -1
-
-    def add_set(self, input1, input2, wi):
-        p_key = self.to_key(input1, input2)
-        self.solved_p_vals[p_key] = wi
-
-def is_pareto_optimal(point, data):
-    """Determine if a data point is pareto optimal
-    
-    Arguments:
-        point: Numpy Array (x,y)
-        data: List of Numpy Arrays of x,y
-    
-    Returns: Boolean; is the data point pareto optimal"""
-
-    for other_point in data:
-        if point[0] < other_point[0] and point[1] < other_point[1]:
-            return False
-    return True
-
-def filter_pareto_optimal(data):
-    """Reduce a list of numpy pairs to only the pareto optimal points
-    
-    Arguments:
-        data: List of numpy arrays (x,y)
-    
-    Returns: List of numpy arrays (x,y)"""
-
-    pareto_optimal_points = []
-    for point in data:
-        if is_pareto_optimal(point, data):
-            pareto_optimal_points.append(point)
-    return pareto_optimal_points
 
 def binary_to_decimal(binary_list):
     """Turn 0-1 lists into a number, for state representation
@@ -331,9 +248,7 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,a
         return np.std(val_probs) 
     elif custom_reward_type == "min":
         probs = s*a*match_probabilities
-
         val_probs = [i for i in probs if i>0]
-
         if len(val_probs) == 0:
             return 0
         else:
@@ -344,50 +259,6 @@ def custom_reward(s,a,match_probabilities,custom_reward_type,reward_parameters,a
     elif custom_reward_type == "probability_context":
         probs = s*a*match_probabilities
         return 1-np.prod(1-probs)
-    elif custom_reward_type == "probability_two_timestep":
-        probs = np.array([a[i]*match_probabilities[0][s[i]] for i in range(len(s))])
-        return 1-np.prod(1-probs)
-    elif custom_reward_type == "probability_two_timestep_2":
-        # TODO: Always change this/make it more general
-        real_s = np.array([1 if s[i] in [3,4,5] else 0 for i in range(len(s))])
-        probs = real_s*a*match_probabilities
-        return 1-np.prod(1-probs)
-    elif custom_reward_type == "probability_multi_state":
-        # TODO: Always change this/make it more general
-        real_s = np.array([1 if s[i] in [1,2,3,4] else 0 for i in range(len(s))])
-        probs = real_s*a*match_probabilities
-        return 1-np.prod(1-probs)
-    elif custom_reward_type == "probability_two_timestep_test":
-        # TODO: Always change this/make it more general
-        real_s = np.array([1 if s[i] in [4,5,6,7] else 0 for i in range(len(s))])
-        probs = real_s*a*match_probabilities
-        return 1-np.prod(1-probs)
-    elif custom_reward_type == "two_by_two":
-        probs = s*a*match_probabilities
-        value_by_combo = {
-            '0000': 0, 
-            '1000': probs[0], 
-            '0100': probs[1],
-            '0010': probs[2],
-            '0001': probs[3], 
-            '1100': max(probs[0],probs[1]), 
-            '1001': probs[0]+probs[3], 
-            '1010': max(probs[0],probs[2]),
-            '0110': max(probs[1],probs[2]), 
-            '0101': probs[1]+probs[3],
-            '0011': max(probs[2],probs[3]),
-            '0111': max(probs[1]+probs[3],probs[2]),
-            '1011': max(probs[0]+probs[3],probs[2]),
-            '1101': max(probs[0]+probs[3],probs[1]+probs[3]),
-            '1110': max(probs[0],max(probs[1],probs[2])),
-            '1111': max(max(probs[0],probs[1])+probs[3],probs[2])
-        }
-
-        str_state_action = s*a 
-        str_state_action = ''.join([str(i) for i in str_state_action])
-        val = value_by_combo[str_state_action]
-
-        return val 
     elif custom_reward_type == "linear":
         real_s = np.array([1 if s[i] in active_states else 0 for i in range(len(s))])
         probs = real_s*a*match_probabilities
@@ -546,10 +417,8 @@ def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1
         memoizer_shapley: Dictionary, to store previously computed Shapley indices
         
     Returns: Two things, shapley index, and updated dictionary"""
-    start = time.time()
     state_as_num = np.array([int(i in env.active_states) for i in state])
 
-    start = time.time()
     shapley_indices = [0 for i in range(len(state))]
     state_str = " ".join([str(i) for i in state])
     if "context" in env.reward_type:
@@ -577,7 +446,6 @@ def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1
     state = [int(i) for i in state]
     scores = np.zeros(num_random_combos)
 
-    start = time.time() 
     if env.reward_type == "probability_context":
         scores = 1-np.prod(1-state_as_num*combinations*corresponding_probabilities,axis=1)
     else:
@@ -587,8 +455,6 @@ def shapley_index_custom_contexts(env,state,context,memoizer_shapley = {},idx=-1
             scores[i] = contextual_custom_reward(state,combinations[i],corresponding_probabilities,env.reward_type,env.reward_parameters,env.active_states,context,state_as_num=state_as_num)
         scores = np.array(scores)
 
-
-    start = time.time()
     num_by_shapley_index = np.zeros(len(state))
 
     if idx!=-1 and env.reward_type == "probability_context":
@@ -638,7 +504,6 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled,context):
         
     Returns: Two things, shapley index, and updated dictionary"""
 
-    start = time.time()
     shapley_indices = [0 for i in range(len(state))]
     state_str = " ".join([str(i) for i in state])
     if "context" in env.reward_type:
@@ -713,6 +578,16 @@ def shapley_index_custom_fixed(env,state,memoizer_shapley,arms_pulled,context):
     return np.array(shapley_indices), memoizer_shapley
 
 def compute_u_matrix(env,N,n_states):
+    """Compute a matrices of values of u_{i}(s) for all i, s
+    Useful to compute Shapley-Whittle indices
+    
+    Arguments:
+        env: RMABSimulator Environment
+        N: Integer, number of agents
+        n_states: Number of total states
+    
+    Returns: numpy matrix of size N x number of states"""
+
     u_matrix = np.zeros((N,n_states))
 
     for s in range(n_states):

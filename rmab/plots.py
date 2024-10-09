@@ -66,8 +66,7 @@ def aggregate_normalize_data(results,baseline=None):
     Returns: Dictionary, with each key mapping to a 
         tuple with the mean and standard deviation"""
 
-    # results_copy = deepcopy(results)
-    results_copy = results 
+    results_copy = deepcopy(results)
 
     for data_point in results_copy:
         avg_by_type = {}

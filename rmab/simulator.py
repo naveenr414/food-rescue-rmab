@@ -1,7 +1,7 @@
 import gym
 import numpy as np
-from rmab.fr_dynamics import  get_food_rescue, get_food_rescue_top, get_food_rescue_multi_state
 from rmab.fr_dynamics import *
+from rmab.fr_predictions import *
 import json 
 from rmab.utils import custom_reward, contextual_custom_reward
 from rmab.baseline_policies import random_policy
@@ -202,7 +202,7 @@ class RMABSimulator(gym.Env):
 
         next_states = np.zeros(self.cohort_size*self.volunteers_per_arm)
 
-        if 'two_timescale' in self.prob_distro:
+        if 'food_rescue_two_timescale' in self.prob_distro:
             n_states = self.transitions[0].shape[0]
 
             should_global_transit = np.random.random()<self.transitions[0,0,0,n_states//2] and np.max(self.states)<n_states//2
@@ -257,662 +257,6 @@ class RMABSimulator(gym.Env):
             else:
                 return contextual_custom_reward(self.states,action,np.array(self.match_probability_list)[self.agent_idx],self.reward_type,self.reward_parameters,self.active_states,self.context)
 
-def assert_valid_transition(transitions):
-    """Determine if a set of transitions is valid;
-        Check that acting is always good, and starting in good state is always good 
-    
-    Arguments: 
-        transitions: Numpy array of size Nx2x2x2
-    
-    Returns: Nothing
-    
-    Side Effects: Prints out if any transitions don't match the assumptions
-        of P_{i}(1,a,1) > P(0,a,1)
-        or P_{i}(s,0,1) > P(s,1,1)"""
-
-    bad = False
-    N, n_states, n_actions, _ = transitions.shape
-
-    if n_states == 2:
-        for i in range(N):
-            for s in range(n_states):
-                # ensure acting is always good
-                if transitions[i,s,1,1] < transitions[i,s,0,1]:
-                    bad = True
-                    print(f'acting should always be good! {i,s} {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}')
-
-                # assert transitions[i,s,1,1] >= transitions[i,s,0,1] + 1e-6, f'acting should always be good! {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}'
-
-        for i in range(N):
-            for a in range(n_actions):
-                # ensure start state is always good
-                # assert transitions[i,1,a,1] >= transitions[i,0,a,1] + 1e-6, f'good start state should always be good! {transitions[i,1,a,1]:.3f} < {transitions[i,0,a,1]:.3f}'
-                if transitions[i,1,a,1] < transitions[i,0,a,1]:
-                    bad = True
-                    print(f'good start state should always be good! {transitions[i,1,a,1]:.3f} < {transitions[i,0,a,1]:.3f}')
-        # assert bad != True
-
-def create_random_transitions(num_transitions,max_prob,min_transition_prob=0):
-    """Create a matrix with a set of random transitions for N agents
-    
-    Arguments:
-        num_transitions: How many sets of random transition matrices to creaet
-        max_prob: Maximum value of P(0,0,1)
-    
-    Returns: Transition matrix, numpy array of size (num_transitions,2,2,2)"""
-    
-    transition_list = np.zeros((num_transitions,2,2,2))
-
-    for i in range(len(transition_list)):
-        transition_list[i,0,0,1] = np.random.uniform(min_transition_prob,max_prob)
-
-        transition_list[i,1,0,1] = np.random.uniform(transition_list[i,0,0,1],1)
-        transition_list[i,0,1,1] = np.random.uniform(transition_list[i,0,0,1],1)
-        transition_list[i,1,1,1] = np.random.uniform(max(transition_list[i,1,0,1],transition_list[i,0,1,1]),1)
-
-        for j in range(2):
-            for k in range(2):
-                transition_list[i,j,k,0] = 1-transition_list[i,j,k,1]
-    return transition_list
-
-def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_epoch_function=None,lamb=0,get_memory=False,should_train=False,test_T=0):
-    """Wrapper to run policies without needing to go through boilerplate code
-    
-    Arguments:
-        env: Simulator environment
-        n_episodes: How many episodes to run for each epoch
-            T = n_episodes * episode_len
-        n_epochs: Number of different epochs/cohorts to run
-        discount: Float, how much to discount rewards by
-        policy: Function that takes in environment, state, budget, and lambda
-            produces action as a result
-        seed: Random seed for run
-        lamb: Float, tradeoff between matching, activity
-        should_train: Should we train the policy; if so, run epochs to train first
-    
-    Returns: Two things
-        matching reward - Numpy array of Epochs x T, with rewards for each combo (this is R_{glob})
-        activity rate - Average rate of engagement across all volunteers (this is R_{i}(s_{i},a_{i}))
-    """
-
-    N         = env.cohort_size*env.volunteers_per_arm
-    n_states  = env.number_states
-    n_actions = env.all_transitions.shape[2]
-    budget    = env.budget
-    T         = env.episode_len * n_episodes
-    env.lamb = lamb 
-
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    env.is_training = False 
-
-    env.reset_all()
-
-    all_reward = np.zeros((n_epochs,test_T))
-    all_active_rate = np.zeros((n_epochs,test_T))
-    num_fully_burned_out = np.zeros((n_epochs,test_T,n_states))
-    env.train_epochs = T-test_T
-    env.test_epochs = test_T
-
-    inference_time_taken = 0
-    train_time_taken = 0
-
-    for epoch in range(n_epochs):
-        train_time_start = time.time() 
-
-        if epoch != 0: env.reset_instance()
-        first_state = env.observe()
-        if len(first_state)>20:
-            first_state = first_state[:20]
-
-        if per_epoch_function:
-            per_epoch_results = per_epoch_function(env,lamb)
-        else:
-            per_epoch_results = None 
-
-        memory = None 
-        for t in range(0, T):
-            if t == 1 and not should_train:
-                start = time.time()
-            state = env.observe()
-            if t>=T-test_T:
-                env.is_training = False
-
-                num_active = len([i for i in state if i in env.active_states])
-                all_active_rate[epoch,t-(T-test_T)] = num_active/len(state)
-
-                counter_state = Counter(state)
-                to_array = [counter_state[i] if i in counter_state else 0 for i in range(n_states)]
-                num_fully_burned_out[epoch,t-(T-test_T)] = np.array(to_array)
-
-            if should_train or t >=T-test_T:
-                action,memory = policy(env,state,budget,lamb,memory,per_epoch_results)
-            else:
-                action,memory = random_policy(env,state,budget,lamb,memory,per_epoch_results)
-            next_state, reward, done, _ = env.step(action)
-
-            if done and t+1 < T: env.reset()
-
-            if t == T-test_T:
-                train_time_taken += time.time()-train_time_start
-
-            if t == T-test_T:
-                np.random.seed(seed)
-                random.seed(seed)
-                start = time.time()
-
-            if t < (T-test_T):
-                env.total_active = 0
-                env.is_training =True 
-            else:
-                all_reward[epoch, t-(T-test_T)] = reward
-        inference_time_taken += time.time()-start 
-    env.time_taken = inference_time_taken
-    env.train_time = train_time_taken
-
-    print("Took {} time for inference and {} time for training".format(inference_time_taken,train_time_taken))
-
-    if get_memory:
-        return all_reward, all_active_rate, memory, num_fully_burned_out
-    return all_reward, all_active_rate, num_fully_burned_out
-
-def get_discounted_reward(global_reward,active_rate,discount,lamb):
-    """Compute the discounted combination of global reward and active rate
-    
-    Arguments: 
-        global_reward: numpy array of size n_epochs x T
-        active_rate: numpy array of size n_epochs x T
-        discount: float, gamma
-
-    Returns: Float, average discounted reward across all epochs"""
-
-    all_rewards = []
-    combined_reward = global_reward*(1-lamb) + lamb*active_rate
-    num_steps = 1
-
-    step_size = len(global_reward[0])//num_steps
-
-    for epoch in range(len(global_reward)):
-        for i in range(num_steps):
-            reward = 0
-            for t in range(i*step_size,(i+1)*step_size):
-                reward += combined_reward[epoch,t]*discount**(t-i*step_size)
-            all_rewards.append(reward)
-    return all_rewards
-
-
-def get_average_reward(global_reward,active_rate,discount,lamb):
-    """Compute the discounted combination of global reward and active rate
-    
-    Arguments: 
-        global_reward: numpy array of size n_epochs x T
-        active_rate: numpy array of size n_epochs x T
-        discount: float, gamma
-
-    Returns: Float, average discounted reward across all epochs"""
-
-    all_rewards = []
-    combined_reward = global_reward*(1-lamb) + lamb*active_rate
-    num_steps = 1
-
-    step_size = len(global_reward[0])//num_steps
-
-    for epoch in range(len(global_reward)):
-        for i in range(num_steps):
-            reward = 0
-            for t in range(i*step_size,(i+1)*step_size):
-                reward += combined_reward[epoch,t]/step_size
-            all_rewards.append(reward)
-    return all_rewards
-
-
-def get_contextual_probabilities(all_population_size):
-    """Get the contextual probabilities for a given number of arms
-    
-    ARguments:
-        all_population_size: Integer, 100, how many different partitions 
-            of volunteer to look at
-        
-    Returns: Two things: a) probabilities for each context, and b) overall probabilities
-        a is a numpy matrix, while b is a numpy array"""
-
-    probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
-    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
-    probs_by_num = {}
-    user_order = list(rescues_by_user.keys())
-    user_order = [i for i in user_order if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3]
-    user_order = sorted(user_order)
-
-    for i in user_order:
-        if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
-            if len(rescues_by_user[i]) not in probs_by_num:
-                probs_by_num[len(rescues_by_user[i])] = []
-            probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
-    num_rescues_per_id = {}
-
-    for i in rescues_by_user:
-        if len(rescues_by_user[i]) not in num_rescues_per_id:
-            num_rescues_per_id[len(rescues_by_user[i])] = []
-        num_rescues_per_id[len(rescues_by_user[i])].append(i)    
-
-    for i in num_rescues_per_id:
-        num_rescues_per_id[i] = sorted(num_rescues_per_id[i])
-
-    partitions = partition_volunteers(probs_by_num,100)
-    all_user_ids = []
-    for i in range(len(partitions)):
-        user_id = np.random.choice(num_rescues_per_id[np.random.choice(partitions[i])])
-        all_user_ids.append(user_id)
-    rf = train_rf()
-    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data() 
-
-    def get_random_match_probs(user_ids,rescue):
-        return get_match_probs(rescue,user_ids,rf[0],donation_id_to_latlon, recipient_location_to_latlon, user_id_to_latlon, rescues_by_user)[0] 
-
-    def get_average_match_probs(user_ids,all_rescue_data):
-        sample = np.random.choice(all_rescue_data,100)
-
-        match_probs = [get_random_match_probs(user_ids,i) for i in sample]
-        match_probs = np.array(match_probs)
-        match_probs = np.mean(match_probs,axis=0)
-
-        return match_probs
-
-    num_contexts = 1000
-    probs_by_partition_context = np.zeros((num_contexts,all_population_size))
-    for i in range(num_contexts):
-        context = np.random.choice(all_rescue_data)
-        probs_by_partition_context[i] = get_random_match_probs(all_user_ids,context)[:all_population_size]
-    match_probabilities = get_average_match_probs(all_user_ids,all_rescue_data)
-
-    return probs_by_partition_context, match_probabilities
-
-def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_prob=0.25):
-    """Create the specific transition probabilities for a given probability distribution, seed
-    
-    Arguments:  
-        prob_distro: String, are we generating 'uniform', 'food_rescue', etc. 
-        seed: Integer, what random seed
-        max_transition_prob: q, dictates the size of transition probabilities
-        
-    Returns: Transition probabiliteis (numpy array of size Nx2x2x2) 
-        and probs_by_partition (For food rescue, the probabilities
-            for each volunteer), list of floats
-    """
-
-    np.random.seed(seed)
-    probs_by_partition = []
-    n_states = 2
-    initial_prob = np.array([[0.5,0.5] for i in range(100)])
-    best_state = 1
-    worst_state = 0
-    active_states = [1]
-    contextual_probs = None 
-
-    if prob_distro == "uniform" or prob_distro == "linearity":
-        all_population_size = 100 
-        all_transitions = create_random_transitions(all_population_size,max_transition_prob)
-    elif prob_distro == "uniform_context":
-        all_population_size = 100 
-        all_transitions = create_random_transitions(all_population_size,max_transition_prob)
-    elif prob_distro == "food_rescue":
-        all_population_size = 100 
-        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
-    elif prob_distro == "food_rescue_context":
-        all_population_size = 100
-        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
-    elif prob_distro == "food_rescue_match":
-        all_population_size = 100 
-        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size,match=True)
-        n_states = all_transitions.shape[1]
-        initial_prob = [0 for i in range(n_states)]
-        initial_prob[0] = 0.5
-        initial_prob[1] = 0.5
-    elif prob_distro == "food_rescue_multi_state":
-        all_population_size = 100 
-        n_states = 5
-        all_transitions, probs_by_partition, initial_prob = get_food_rescue_multi_state(all_population_size)
-        best_state = 3
-        worst_state = 4
-        active_states = [1,2,3]
-    elif prob_distro == "food_rescue_two_timestep" or prob_distro == "food_rescue_two_timestep_quick":
-        all_population_size = 1000 
-        n_states = 40
-
-        if prob_distro == "food_rescue_two_timestep_quick":
-            all_transitions = np.array(json.load(open("../../results/food_rescue/two_step_transitions_quick.json"))).reshape((40,2,40))
-        else:
-            all_transitions = np.array(json.load(open("../../results/food_rescue/two_step_transitions.json"))).reshape((40,2,40))
-        expanded_array = np.expand_dims(all_transitions, axis=0)  # Shape becomes (1, 40, 2, 40)
-        all_transitions = np.tile(expanded_array, (all_population_size, 1, 1, 1))  # Shape becomes (100, 40, 2, 40)
-        probs_by_partition = None 
-        initial_prob = json.load(open("../../results/food_rescue/two_step_start_probs.json"))
-        expanded_array = np.expand_dims(initial_prob, axis=0)  # Shape becomes (1, 40, 2, 40)
-        initial_prob = np.tile(expanded_array, (all_population_size, 1))  # Shape becomes (100, 40, 2, 40)
-
-        best_state = 19
-        worst_state = 0
-        active_states = []
-
-        for i in range(1,5):
-            for j in range(1,4):
-                active_states.append(4*i+j) 
-    elif prob_distro == "food_rescue_two_timestep_2":
-        all_population_size = 100 
-        n_states = 12
-        active_states = [3,4,5]
-        alpha = 5
-        w = 25
-        m_1 = 0.01
-        m_2 = 0.1
-        average_trips_per_week = 100
-        n_0 = 0
-        r_2 = 0
-        r_1 = 0.9
-        all_population_size = 100
-        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
-
-        initial_prob = np.zeros((all_population_size,n_states))
-        initial_prob[:,-1] = 1
-
-        all_transitions = np.zeros((all_population_size,n_states,2,n_states))
-
-        all_transitions[:,0,:,0+n_states//2] = 1/average_trips_per_week
-        all_transitions[:,0,:,0] = 1-1/average_trips_per_week
-
-        all_transitions[:,1,:,1+n_states//2] = 1/average_trips_per_week
-        all_transitions[:,1,:,1] = 1-1/average_trips_per_week
-
-        all_transitions[:,2,:,2+n_states//2] = 1/average_trips_per_week
-        all_transitions[:,2,:,2] = 1-1/average_trips_per_week
-
-        all_transitions[:,2,:,2+n_states//2] = 1/average_trips_per_week
-        all_transitions[:,2,:,2] = 1-1/average_trips_per_week
-
-        all_transitions[:,3,:,3+n_states//2] = 1/average_trips_per_week
-        all_transitions[:,3,:,3] = (1-1/average_trips_per_week)
-
-        all_transitions[:,4,:,4+n_states//2] = 1/average_trips_per_week
-        all_transitions[:,4,0,4] = (1-1/average_trips_per_week)
-        all_transitions[:,4,1,4] = (1-1/average_trips_per_week)*(1-m_2)
-        all_transitions[:,4,1,3] = (1-1/average_trips_per_week)*(m_2)
-
-        all_transitions[:,5,:,5+n_states//2] = 1/average_trips_per_week
-        all_transitions[:,5,0,5] = (1-1/average_trips_per_week)
-        all_transitions[:,5,1,5] = (1-1/average_trips_per_week)*(1-m_1)
-        all_transitions[:,5,1,4] = (1-1/average_trips_per_week)*(m_1)
-
-        all_transitions[:,6,:,0] = 1
-        all_transitions[:,7,:,0] = 1
-        all_transitions[:,8,:,0] = 1
-
-        all_transitions[:,9,:,5] = r_2
-        all_transitions[:,9,:,4] = (1-r_2)*0
-        all_transitions[:,9,:,0] = (1-r_2)*1
-
-        all_transitions[:,10,:,5] = r_1
-        all_transitions[:,10,:,4] = (1-r_1)*0.4
-        all_transitions[:,10,:,3] = (1-r_1)*0.4
-        all_transitions[:,10,:,0] = (1-r_1)*0.2
-
-        all_transitions[:,11,:,5] = 1
-
-        best_state = 5
-        worst_state = 0
-        
-    elif "multi_state" in prob_distro:
-        active_states = set([1,2,3,4]) 
-        n_states = 5
-        all_population_size = 100
-        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
-        alpha = recovery_rate
-
-        initial_prob = np.zeros((all_population_size,n_states))
-        initial_prob[:,-1] = 1
-        all_burnout_rates = json.load(open('../../results/food_rescue/all_burnout_rates.json'))
-        probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
-        donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
-        probs_by_num = {}
-        user_order = list(rescues_by_user.keys())
-        user_order = [i for i in user_order if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3]
-        user_order = sorted(user_order)
-
-        for i in user_order:
-            if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
-                if len(rescues_by_user[i]) not in probs_by_num:
-                    probs_by_num[len(rescues_by_user[i])] = []
-                probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
-
-        partitions = partition_volunteers(probs_by_num,all_population_size)[:all_population_size]
-        intervals = [10,50,100,1000]
-
-        burnout_by_partition = []
-        for i in range(len(partitions)):
-            current_burnout = np.array([0.0 for i in range(len(intervals))])
-            total_probs = sum([len(probs_by_num[j]) for j in partitions[i] if str(j) in all_burnout_rates])
-            for j in partitions[i]:
-                if str(j) in all_burnout_rates:
-                    j_burnout = all_burnout_rates[str(j)][::-1]
-                    j_burnout = np.array(j_burnout)*len(probs_by_num[j])/total_probs 
-                    current_burnout += j_burnout
-            burnout_by_partition.append(current_burnout)
-        burnout_by_partition = np.array(burnout_by_partition)
-
-        if prob_distro == "multi_state_constant":
-            probs_increase = np.array([alpha,alpha,alpha,alpha,alpha])
-        elif prob_distro == "multi_state_decreasing":
-            probs_increase = np.array([alpha,alpha/2,alpha/3,alpha/4,alpha/5])
-        elif prob_distro == "multi_state_increasing":
-            probs_increase = np.array([alpha/5,alpha/4,alpha/3,alpha/2,alpha])
-
-        probs_decrease = np.array([0,0,1/50,1/40,0.1])
-        prob_burnout = burnout_by_partition
-
-        all_transitions = np.zeros((all_population_size,n_states,2,n_states))
-
-        all_transitions[:,0,1,0] = 1
-        all_transitions[:,0,0,0] = 1
-
-        all_transitions[:,1,0,2] = probs_increase[1]
-        all_transitions[:,1,0,1] = 1-probs_increase[1]
-        all_transitions[:,1,1,0] = prob_burnout[:,0]
-        all_transitions[:,1,1,1] = 1-prob_burnout[:,0]
-
-        all_transitions[:,2,1,0] = prob_burnout[:,1]
-        all_transitions[:,2,1,1] = probs_decrease[2]
-        all_transitions[:,2,1,2] = 1-probs_decrease[2]-prob_burnout[:,1]
-        all_transitions[:,2,0,3] = probs_increase[2]
-        all_transitions[:,2,0,2] = 1-probs_increase[2]
-
-        all_transitions[:,3,1,0] = prob_burnout[:,2]
-        all_transitions[:,3,1,2] = probs_decrease[3]
-        all_transitions[:,3,1,3] = 1-probs_decrease[3]-prob_burnout[:,2]
-        all_transitions[:,3,0,4] = probs_increase[3]
-        all_transitions[:,3,0,3] = 1-probs_increase[3]
-
-        all_transitions[:,4,1,0] = prob_burnout[:,3]
-        all_transitions[:,4,1,3] = probs_decrease[4]
-        all_transitions[:,4,1,4] = 1-probs_decrease[4]-prob_burnout[:,3]
-        all_transitions[:,4,0,4] = 1
-        best_state = 4
-        worst_state = 0
-
-    elif 'two_timescale' in prob_distro:
-        start = time.time()
-        active_states = [4,5,6,7]
-        n_states = 16
-        all_population_size = 100
-        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
-
-        initial_prob = np.zeros((all_population_size,n_states))
-        initial_prob[:,-1] = 1
-        
-        global_rate = 1/1250
-
-        probs_decrease = np.array([0,1/50,1/40,0.1])
-        probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
-        _,_, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
-        probs_by_num = {}
-
-        user_order = list(rescues_by_user.keys())
-        user_order = [i for i in user_order if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3]
-        user_order = sorted(user_order)
-
-        for i in user_order:
-            if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
-                if len(rescues_by_user[i]) not in probs_by_num:
-                    probs_by_num[len(rescues_by_user[i])] = []
-                probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
-
-        partitions = partition_volunteers(probs_by_num,all_population_size)[:all_population_size]
-        intervals = [10,50,100,1000]
-
-        all_weekly_transitions = json.load(open('../../results/food_rescue/all_weekly_transitions.json'))
-        weekly_transitions_by_partition = []
-        for i in range(len(partitions)):
-            current_transitions = np.zeros((2,len(intervals),2))
-            total_probs = sum([len(probs_by_num[j]) for j in partitions[i] if str(j) in all_weekly_transitions])
-            for j in partitions[i]:
-                if str(j) in all_weekly_transitions:
-                    weekly_transition_partition = np.array(all_weekly_transitions[str(j)])[:,::-1,:]
-                    current_transitions += weekly_transition_partition*len(probs_by_num[j])/total_probs 
-            weekly_transitions_by_partition.append(weekly_transition_partition)
-        weekly_transitions_by_partition = np.array(weekly_transitions_by_partition)
-
-        all_transitions = np.zeros((all_population_size,n_states,2,n_states))
-        all_transitions[:,0,1,0] = 1
-        all_transitions[:,0,0,0] = 1
-
-        all_transitions[:,1,1,0] = probs_decrease[1]
-        all_transitions[:,1,1,1] = 1-probs_decrease[1] 
-        all_transitions[:,1,0,1] = 1
-
-        all_transitions[:,2,1,1] = probs_decrease[2]
-        all_transitions[:,2,1,2] = 1-probs_decrease[2]
-        all_transitions[:,2,0,2] = 1
-
-        all_transitions[:,3,1,2] = probs_decrease[3]
-        all_transitions[:,3,1,3] = 1-probs_decrease[3]
-        all_transitions[:,3,0,3] = 1
-
-        all_transitions[:,4,:,4] = 1
-
-        all_transitions[:,5,1,4] = probs_decrease[1]
-        all_transitions[:,5,1,5] = 1-probs_decrease[1]
-        all_transitions[:,5,0,5] = 1
-
-        all_transitions[:,6,1,5] = probs_decrease[2]
-        all_transitions[:,6,1,6] = 1-probs_decrease[2]
-        all_transitions[:,6,0,6] = 1
-
-        all_transitions[:,7,1,6] = probs_decrease[3]
-        all_transitions[:,7,1,7] = 1-probs_decrease[3]
-        all_transitions[:,7,0,7] = 1
-
-        all_transitions *= (1-global_rate)
-        all_transitions[:,0,:,8] = global_rate 
-        all_transitions[:,1,:,9] = global_rate 
-        all_transitions[:,2,:,10] = global_rate 
-        all_transitions[:,3,:,11] = global_rate 
-        all_transitions[:,4,:,12] = global_rate 
-        all_transitions[:,5,:,13] = global_rate 
-        all_transitions[:,6,:,14] = global_rate 
-        all_transitions[:,7,:,15] = global_rate 
-
-
-        for num_notifications in range(4):
-            for start_engagement in range(2):
-                for end_engagement in range(2):
-                    for a in range(2):
-                        start_state = 8+start_engagement*4+num_notifications
-                        end_state = 4*end_engagement+3
-                        all_transitions[:,start_state,a,end_state] = weekly_transitions_by_partition[:,start_engagement,num_notifications,end_engagement]
-        best_state = 7
-        worst_state = 0
-
-
-    elif prob_distro == "food_rescue_top":
-        all_population_size = 20 
-        all_transitions, probs_by_partition = get_food_rescue_top(all_population_size)
-    elif prob_distro == "high_prob":
-        all_population_size = 100 
-        max_transition_prob = 1.0
-        all_transitions = create_random_transitions(all_population_size,max_transition_prob)
-    elif prob_distro == "one_time":
-        all_population_size = 100 
-        all_transitions = np.zeros((all_population_size,2,2,2))
-        all_transitions[:,:,1,0] = 1
-        all_transitions[:,1,0,1] = 1
-        all_transitions[:,0,0,0] = 1        
-    else:
-        raise Exception("Probability distribution {} not found".format(prob_distro))
-    
-    return all_transitions, probs_by_partition, n_states, initial_prob, best_state, worst_state, active_states
-
-def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,volunteers_per_arm):
-    """Create the m_{i} or Y_{i} values for a given reward function
-
-    Arguments:  
-        reward_type: String, are we using 
-            a) set_cover
-            b) probability
-            c) linear
-            d) max
-        reward_parameters: Dictionary with arm_set_low, arm_set_high, and universize_size
-            This dictates the size of m_{i}, Y_{i}
-        N: number of arms total
-        probs_by_partition: For food rescue, the list of probabilities for volunteers in each 
-            partition/arm
-    
-    Returns: List of floats/sets, either m_{i} or Y_{i}(s_{i})"""
-
-    contextual_probs = None
-    if reward_type == "set_cover":
-        if prob_distro == "fixed":
-            match_probabilities = []
-            set_sizes = [int(reward_parameters['arm_set_low']) for i in range(N)]
-            for i in range(N):
-                s = set() 
-                while len(s) < set_sizes[i]:
-                    s.add(np.random.randint(0,reward_parameters['universe_size']))
-                match_probabilities.append(s)
-        else:
-            set_sizes = [np.random.randint(int(reward_parameters['arm_set_low']),int(reward_parameters['arm_set_high'])+1) for i in range(N)]
-            match_probabilities = [] 
-            
-            for i in range(N):
-                temp_set = set() 
-                
-                while len(temp_set) < set_sizes[i]:
-                    temp_set.add(np.random.randint(0,reward_parameters['universe_size']))
-                match_probabilities.append(temp_set)
-    elif "food_rescue" in prob_distro or "two_timescale" in prob_distro or 'multi_state' in prob_distro:
-        if prob_distro == "food_rescue_context" or prob_distro == "two_timescale_context":
-            if len(probs_by_partition) == 102 and os.path.exists("../../results/food_rescue/match_probs_102.pkl"):
-                contextual_probs = pickle.load(open("../../results/food_rescue/contextual_probs_102.pkl","rb"))
-                match_probabilities = pickle.load(open("../../results/food_rescue/match_probs_102.pkl","rb"))
-            elif len(probs_by_partition) == 100 and os.path.exists("../../results/food_rescue/match_probs_102.pkl"):
-                contextual_probs = pickle.load(open("../../results/food_rescue/contextual_probs_102.pkl","rb"))[:,:100]
-                match_probabilities = pickle.load(open("../../results/food_rescue/match_probs_102.pkl","rb"))[:100]
-            else:
-                contextual_probs,match_probabilities = get_contextual_probabilities(len(probs_by_partition))
-        elif prob_distro == "food_rescue_two_timestep" or prob_distro == "food_rescue_two_timestep_quick":
-            match_probabilities = json.load(open("../../results/food_rescue/two_step_match_probs.json"))
-            expanded_array = np.expand_dims(match_probabilities, axis=0)  # Shape becomes (1, 40, 2, 40)
-            match_probabilities = np.tile(expanded_array, (1000, 1))  # Shape becomes (100, 40, 2, 40)
-        else:
-            match_probabilities = [np.random.choice(probs_by_partition[i//volunteers_per_arm]) for i in range(N)] 
-    elif prob_distro == "uniform_context":
-        match_probabilities = np.array([np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)])
-        rows = 10000
-        cols = len(match_probabilities)
-        noise = np.random.normal(0, 0.5, size=(rows, cols))
-        contextual_probs = np.tile(match_probabilities, (rows, 1)) + noise
-        contextual_probs = np.clip(contextual_probs,0,1)
-    else:
-        match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
-    return contextual_probs, match_probabilities
 
 def create_environment(parameters,max_transition_prob=0.25):
     """Create an RMAB Simulator environment based on parameters
@@ -1055,8 +399,8 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
 
         time_whittle = simulator.time_taken
 
-
-        if parameters['prob_distro'] == 'food_rescue_two_timestep' or parameters['prob_distro'] == 'food_rescue_two_timestep_quick' or parameters['prob_distro'] == 'food_rescue_two_timestep_2' or 'multi_state' in parameters['prob_distro'] or 'two_timescale' in parameters['prob_distro']:
+        # We use average reward only for the two timestep experiments 
+        if 'food_rescue_two_timescale' in parameters['prob_distro']:
             discounted_reward = get_average_reward(match,active_rate,parameters['discount'],parameters['lamb'])    
         else:
             discounted_reward = get_discounted_reward(match,active_rate,parameters['discount'],parameters['lamb'])
@@ -1066,10 +410,403 @@ def run_multi_seed(seed_list,policy,parameters,should_train=False,per_epoch_func
         scores['match'].append(np.mean(match))
         scores['active_rate'].append(np.mean(active_rate))
 
-        if 'two_timescale' in parameters['prob_distro'] or 'multi_state' in parameters['prob_distro']:
+        if 'food_rescue_two_timescale' in parameters['prob_distro']:
             scores['burned_out_rate'].append(burn_out_rates.tolist())
 
         if should_train:
             memories.append(memory)
 
     return scores, memories, simulator
+
+
+def run_heterogenous_policy(env, n_episodes, n_epochs,discount,policy,seed,per_epoch_function=None,lamb=0,get_memory=False,should_train=False,test_T=0):
+    """Wrapper to run policies without needing to go through boilerplate code
+    
+    Arguments:
+        env: Simulator environment
+        n_episodes: How many episodes to run for each epoch
+            T = n_episodes * episode_len
+        n_epochs: Number of different epochs/cohorts to run
+        discount: Float, how much to discount rewards by
+        policy: Function that takes in environment, state, budget, and lambda
+            produces action as a result
+        seed: Random seed for run
+        lamb: Float, tradeoff between matching, activity
+        should_train: Should we train the policy; if so, run epochs to train first
+    
+    Returns: Two things
+        matching reward - Numpy array of Epochs x T, with rewards for each combo (this is R_{glob})
+        activity rate - Average rate of engagement across all volunteers (this is R_{i}(s_{i},a_{i}))
+    """
+
+    N         = env.cohort_size*env.volunteers_per_arm
+    n_states  = env.number_states
+    n_actions = env.all_transitions.shape[2]
+    budget    = env.budget
+    T         = env.episode_len * n_episodes
+    env.lamb = lamb 
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    env.is_training = False 
+
+    env.reset_all()
+
+    all_reward = np.zeros((n_epochs,test_T))
+    all_active_rate = np.zeros((n_epochs,test_T))
+    num_fully_burned_out = np.zeros((n_epochs,test_T,n_states))
+    env.train_epochs = T-test_T
+    env.test_epochs = test_T
+
+    inference_time_taken = 0
+    train_time_taken = 0
+
+    for epoch in range(n_epochs):
+        train_time_start = time.time() 
+
+        if epoch != 0: env.reset_instance()
+        first_state = env.observe()
+        if len(first_state)>20:
+            first_state = first_state[:20]
+
+        if per_epoch_function:
+            per_epoch_results = per_epoch_function(env,lamb)
+        else:
+            per_epoch_results = None 
+
+        memory = None 
+        for t in range(0, T):
+            if t == 1 and not should_train:
+                start = time.time()
+            state = env.observe()
+            if t>=T-test_T:
+                env.is_training = False
+
+                num_active = len([i for i in state if i in env.active_states])
+                all_active_rate[epoch,t-(T-test_T)] = num_active/len(state)
+
+                counter_state = Counter(state)
+                to_array = [counter_state[i] if i in counter_state else 0 for i in range(n_states)]
+                num_fully_burned_out[epoch,t-(T-test_T)] = np.array(to_array)
+
+            if should_train or t >=T-test_T:
+                action,memory = policy(env,state,budget,lamb,memory,per_epoch_results)
+            else:
+                action,memory = random_policy(env,state,budget,lamb,memory,per_epoch_results)
+            next_state, reward, done, _ = env.step(action)
+
+            if done and t+1 < T: env.reset()
+
+            if t == T-test_T:
+                train_time_taken += time.time()-train_time_start
+
+            if t == T-test_T:
+                np.random.seed(seed)
+                random.seed(seed)
+                start = time.time()
+
+            if t < (T-test_T):
+                env.total_active = 0
+                env.is_training =True 
+            else:
+                all_reward[epoch, t-(T-test_T)] = reward
+        inference_time_taken += time.time()-start 
+    env.time_taken = inference_time_taken
+    env.train_time = train_time_taken
+
+    print("Took {} time for inference and {} time for training".format(inference_time_taken,train_time_taken))
+
+    if get_memory:
+        return all_reward, all_active_rate, memory, num_fully_burned_out
+    return all_reward, all_active_rate, num_fully_burned_out
+
+def assert_valid_transition(transitions):
+    """Determine if a set of transitions is valid;
+        Check that acting is always good, and starting in good state is always good 
+    
+    Arguments: 
+        transitions: Numpy array of size Nx2x2x2
+    
+    Returns: Nothing
+    
+    Side Effects: Prints out if any transitions don't match the assumptions
+        of P_{i}(1,a,1) > P(0,a,1)
+        or P_{i}(s,0,1) > P(s,1,1)"""
+
+    bad = False
+    N, n_states, n_actions, _ = transitions.shape
+
+    if n_states == 2:
+        for i in range(N):
+            for s in range(n_states):
+                # ensure acting is always good
+                if transitions[i,s,1,1] < transitions[i,s,0,1]:
+                    bad = True
+                    print(f'acting should always be good! {i,s} {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}')
+
+                # assert transitions[i,s,1,1] >= transitions[i,s,0,1] + 1e-6, f'acting should always be good! {transitions[i,s,1,1]:.3f} < {transitions[i,s,0,1]:.3f}'
+
+        for i in range(N):
+            for a in range(n_actions):
+                # ensure start state is always good
+                # assert transitions[i,1,a,1] >= transitions[i,0,a,1] + 1e-6, f'good start state should always be good! {transitions[i,1,a,1]:.3f} < {transitions[i,0,a,1]:.3f}'
+                if transitions[i,1,a,1] < transitions[i,0,a,1]:
+                    bad = True
+                    print(f'good start state should always be good! {transitions[i,1,a,1]:.3f} < {transitions[i,0,a,1]:.3f}')
+        # assert bad != True
+
+def create_random_transitions(num_transitions,max_prob,min_transition_prob=0):
+    """Create a matrix with a set of random transitions for N agents
+    
+    Arguments:
+        num_transitions: How many sets of random transition matrices to creaet
+        max_prob: Maximum value of P(0,0,1)
+    
+    Returns: Transition matrix, numpy array of size (num_transitions,2,2,2)"""
+    
+    transition_list = np.zeros((num_transitions,2,2,2))
+
+    for i in range(len(transition_list)):
+        transition_list[i,0,0,1] = np.random.uniform(min_transition_prob,max_prob)
+
+        transition_list[i,1,0,1] = np.random.uniform(transition_list[i,0,0,1],1)
+        transition_list[i,0,1,1] = np.random.uniform(transition_list[i,0,0,1],1)
+        transition_list[i,1,1,1] = np.random.uniform(max(transition_list[i,1,0,1],transition_list[i,0,1,1]),1)
+
+        for j in range(2):
+            for k in range(2):
+                transition_list[i,j,k,0] = 1-transition_list[i,j,k,1]
+    return transition_list
+
+def get_discounted_reward(global_reward,active_rate,discount,lamb):
+    """Compute the discounted combination of global reward and active rate
+    
+    Arguments: 
+        global_reward: numpy array of size n_epochs x T
+        active_rate: numpy array of size n_epochs x T
+        discount: float, gamma
+
+    Returns: Float, average discounted reward across all epochs"""
+
+    all_rewards = []
+    combined_reward = global_reward*(1-lamb) + lamb*active_rate
+    num_steps = 1
+
+    step_size = len(global_reward[0])//num_steps
+
+    for epoch in range(len(global_reward)):
+        for i in range(num_steps):
+            reward = 0
+            for t in range(i*step_size,(i+1)*step_size):
+                reward += combined_reward[epoch,t]*discount**(t-i*step_size)
+            all_rewards.append(reward)
+    return all_rewards
+
+
+def get_average_reward(global_reward,active_rate,discount,lamb):
+    """Compute the discounted combination of global reward and active rate
+    
+    Arguments: 
+        global_reward: numpy array of size n_epochs x T
+        active_rate: numpy array of size n_epochs x T
+        discount: float, gamma
+
+    Returns: Float, average discounted reward across all epochs"""
+
+    all_rewards = []
+    combined_reward = global_reward*(1-lamb) + lamb*active_rate
+    num_steps = 1
+
+    step_size = len(global_reward[0])//num_steps
+
+    for epoch in range(len(global_reward)):
+        for i in range(num_steps):
+            reward = 0
+            for t in range(i*step_size,(i+1)*step_size):
+                reward += combined_reward[epoch,t]/step_size
+            all_rewards.append(reward)
+    return all_rewards
+
+
+def get_contextual_probabilities(all_population_size):
+    """Get the contextual probabilities for a given number of arms
+    
+    ARguments:
+        all_population_size: Integer, 100, how many different partitions 
+            of volunteer to look at
+        
+    Returns: Two things: a) probabilities for each context, and b) overall probabilities
+        a is a numpy matrix, while b is a numpy array"""
+
+    probs_by_user = json.load(open("../../results/food_rescue/match_probs.json","r"))
+    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data()
+    probs_by_num = {}
+    user_order = list(rescues_by_user.keys())
+    user_order = [i for i in user_order if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3]
+    user_order = sorted(user_order)
+
+    for i in user_order:
+        if str(i) in probs_by_user and probs_by_user[str(i)] > 0 and len(rescues_by_user[i]) >= 3:
+            if len(rescues_by_user[i]) not in probs_by_num:
+                probs_by_num[len(rescues_by_user[i])] = []
+            probs_by_num[len(rescues_by_user[i])].append(probs_by_user[str(i)])
+    num_rescues_per_id = {}
+
+    for i in rescues_by_user:
+        if len(rescues_by_user[i]) not in num_rescues_per_id:
+            num_rescues_per_id[len(rescues_by_user[i])] = []
+        num_rescues_per_id[len(rescues_by_user[i])].append(i)    
+
+    for i in num_rescues_per_id:
+        num_rescues_per_id[i] = sorted(num_rescues_per_id[i])
+
+    partitions = partition_volunteers(probs_by_num,100)
+    all_user_ids = []
+    for i in range(len(partitions)):
+        user_id = np.random.choice(num_rescues_per_id[np.random.choice(partitions[i])])
+        all_user_ids.append(user_id)
+    rf = train_rf()
+    donation_id_to_latlon, recipient_location_to_latlon, rescues_by_user, all_rescue_data, user_id_to_latlon = get_db_data() 
+
+    def get_random_match_probs(user_ids,rescue):
+        return get_match_probs(rescue,user_ids,rf[0],donation_id_to_latlon, recipient_location_to_latlon, user_id_to_latlon, rescues_by_user)[0] 
+
+    def get_average_match_probs(user_ids,all_rescue_data):
+        sample = np.random.choice(all_rescue_data,100)
+
+        match_probs = [get_random_match_probs(user_ids,i) for i in sample]
+        match_probs = np.array(match_probs)
+        match_probs = np.mean(match_probs,axis=0)
+
+        return match_probs
+
+    num_contexts = 1000
+    probs_by_partition_context = np.zeros((num_contexts,all_population_size))
+    for i in range(num_contexts):
+        context = np.random.choice(all_rescue_data)
+        probs_by_partition_context[i] = get_random_match_probs(all_user_ids,context)[:all_population_size]
+    match_probabilities = get_average_match_probs(all_user_ids,all_rescue_data)
+
+    return probs_by_partition_context, match_probabilities
+
+def create_transitions_from_prob(prob_distro,seed,recovery_rate,max_transition_prob=0.25):
+    """Create the specific transition probabilities for a given probability distribution, seed
+    
+    Arguments:  
+        prob_distro: String, are we generating 'uniform', 'food_rescue', etc. 
+        seed: Integer, what random seed
+        max_transition_prob: q, dictates the size of transition probabilities
+        
+    Returns: Transition probabiliteis (numpy array of size Nx2x2x2) 
+        and probs_by_partition (For food rescue, the probabilities
+            for each volunteer), list of floats
+    """
+
+    np.random.seed(seed)
+    probs_by_partition = []
+    n_states = 2
+    initial_prob = np.array([[0.5,0.5] for i in range(100)])
+    best_state = 1
+    worst_state = 0
+    active_states = [1]
+
+    if prob_distro == "uniform" or prob_distro == "linearity":
+        all_population_size = 100 
+        all_transitions = create_random_transitions(all_population_size,max_transition_prob)
+    elif prob_distro == "uniform_context":
+        all_population_size = 100 
+        all_transitions = create_random_transitions(all_population_size,max_transition_prob)
+    elif prob_distro == "food_rescue":
+        all_population_size = 100 
+        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
+    elif prob_distro == "food_rescue_context":
+        all_population_size = 100
+        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
+    elif 'food_rescue_two_timescale' in prob_distro:
+        active_states = [4,5,6,7]
+        n_states = 16
+        all_population_size = 100
+        all_transitions, probs_by_partition, initial_prob = get_food_rescue(all_population_size)
+
+        initial_prob = np.zeros((all_population_size,n_states))
+        initial_prob[:,-1] = 1
+        
+        all_transitions, best_state, worst_state = get_two_timestep_transitions(all_population_size,n_states)
+    elif prob_distro == "food_rescue_top":
+        all_population_size = 20 
+        all_transitions, probs_by_partition = get_food_rescue_top(all_population_size)
+    elif prob_distro == "high_prob":
+        all_population_size = 100 
+        max_transition_prob = 1.0
+        all_transitions = create_random_transitions(all_population_size,max_transition_prob)
+    elif prob_distro == "one_time":
+        all_population_size = 100 
+        all_transitions = np.zeros((all_population_size,2,2,2))
+        all_transitions[:,:,1,0] = 1
+        all_transitions[:,1,0,1] = 1
+        all_transitions[:,0,0,0] = 1        
+    else:
+        raise Exception("Probability distribution {} not found".format(prob_distro))
+    
+    return all_transitions, probs_by_partition, n_states, initial_prob, best_state, worst_state, active_states
+
+def get_match_probabilities_synthetic(reward_type,reward_parameters,prob_distro,N,probs_by_partition,volunteers_per_arm):
+    """Create the m_{i} or Y_{i} values for a given reward function
+
+    Arguments:  
+        reward_type: String, are we using 
+            a) set_cover
+            b) probability
+            c) linear
+            d) max
+        reward_parameters: Dictionary with arm_set_low, arm_set_high, and universize_size
+            This dictates the size of m_{i}, Y_{i}
+        N: number of arms total
+        probs_by_partition: For food rescue, the list of probabilities for volunteers in each 
+            partition/arm
+    
+    Returns: List of floats/sets, either m_{i} or Y_{i}(s_{i})"""
+
+    contextual_probs = None
+    if reward_type == "set_cover":
+        if prob_distro == "fixed":
+            match_probabilities = []
+            set_sizes = [int(reward_parameters['arm_set_low']) for i in range(N)]
+            for i in range(N):
+                s = set() 
+                while len(s) < set_sizes[i]:
+                    s.add(np.random.randint(0,reward_parameters['universe_size']))
+                match_probabilities.append(s)
+        else:
+            set_sizes = [np.random.randint(int(reward_parameters['arm_set_low']),int(reward_parameters['arm_set_high'])+1) for i in range(N)]
+            match_probabilities = [] 
+            
+            for i in range(N):
+                temp_set = set() 
+                
+                while len(temp_set) < set_sizes[i]:
+                    temp_set.add(np.random.randint(0,reward_parameters['universe_size']))
+                match_probabilities.append(temp_set)
+    elif "food_rescue" in prob_distro:
+        if prob_distro == "food_rescue_context" or prob_distro == "food_rescue_two_timescale_context":
+            if len(probs_by_partition) == 102 and os.path.exists("../../results/food_rescue/match_probs_102.pkl"):
+                contextual_probs = pickle.load(open("../../results/food_rescue/contextual_probs_102.pkl","rb"))
+                match_probabilities = pickle.load(open("../../results/food_rescue/match_probs_102.pkl","rb"))
+            elif len(probs_by_partition) == 100 and os.path.exists("../../results/food_rescue/match_probs_102.pkl"):
+                contextual_probs = pickle.load(open("../../results/food_rescue/contextual_probs_102.pkl","rb"))[:,:100]
+                match_probabilities = pickle.load(open("../../results/food_rescue/match_probs_102.pkl","rb"))[:100]
+            else:
+                contextual_probs,match_probabilities = get_contextual_probabilities(len(probs_by_partition))
+        else:
+            match_probabilities = [np.random.choice(probs_by_partition[i//volunteers_per_arm]) for i in range(N)] 
+    elif prob_distro == "uniform_context":
+        match_probabilities = np.array([np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)])
+        rows = 10000
+        cols = len(match_probabilities)
+        noise = np.random.normal(0, 0.5, size=(rows, cols))
+        contextual_probs = np.tile(match_probabilities, (rows, 1)) + noise
+        contextual_probs = np.clip(contextual_probs,0,1)
+    else:
+        match_probabilities = [np.random.uniform(reward_parameters['arm_set_low'],reward_parameters['arm_set_high']) for i in range(N)]
+    return contextual_probs, match_probabilities

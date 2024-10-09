@@ -2499,3 +2499,55 @@ def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
     action[sorted_WI[:budget]] = 1
 
     return action, memoizer 
+
+def index_computation_policy(env,state,budget,lamb,memory,per_epoch_results):
+    """Q Iteration policy that computes Q values for all combinations of states
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: The Q Values
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+
+    Q_vals = per_epoch_results
+    N = len(state)
+
+    indices = np.zeros(N)
+    state_rep = binary_to_decimal(state)
+
+    for trial in range(5):
+        for i in range(N):
+            max_index = 10
+            min_index = 0
+
+            for _ in range(20):
+                predicted_index = (max_index+min_index)/2 
+                other_agents = [i_prime for i_prime in range(N) if indices[i_prime]>=predicted_index and i_prime != i]
+                agent_vals = np.array(env.match_probability_list)[env.agent_idx]*state
+
+                other_agents = sorted(other_agents,key=lambda k: agent_vals[k],reverse=True)
+
+                agents_with_i = set(other_agents[:budget-1] + [i])
+                binary_with_i = binary_to_decimal([1 if i in agents_with_i else 0 for i in range(N)])
+                agents_without_i = set(other_agents[:budget-1])
+                binary_without_i = binary_to_decimal([1 if i in agents_without_i else 0 for i in range(N)])
+
+                q_with_i = Q_vals[state_rep,binary_with_i]
+                q_without_i = Q_vals[state_rep,binary_without_i]
+
+                if q_with_i > q_without_i + predicted_index:
+                    min_index = predicted_index 
+                else:
+                    max_index = predicted_index 
+            indices[i] = (max_index+min_index)/2
+
+    indices = np.argsort(indices)[-budget:][::-1]
+
+    action = np.zeros(N, dtype=np.int8)
+    action[indices] = 1
+
+    return action, None

@@ -4,29 +4,6 @@ from rmab.compute_whittle import arm_value_iteration_exponential
 
 import random 
 
-def compute_p_matrix(env,N):
-    n_states = env.transitions.shape[1]
-    p_matrix = np.zeros((N,n_states))
-
-    for i in range(N):
-        for s in range(n_states):
-            default_state = [env.worst_state for _ in range(N)]
-            default_state[i] = s
-            p_matrix[i,s] = custom_reward(default_state,one_hot(i,N),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.active_states)
-    return p_matrix 
-
-def compute_reward_matrix(env,N,lamb):
-    n_states = env.transitions.shape[1]
-    reward_matrix = np.zeros((N,n_states,2))
-
-    for i in range(N):
-        for j in range(n_states):
-            if j in env.active_states:
-                reward_matrix[i,j] += lamb/N
-    
-    return reward_matrix 
-
-
 def greedy_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Greedy policy that selects the budget highest values
         of state*match_probability + activity_score * lamb
@@ -104,7 +81,6 @@ def q_iteration_policy(env,state,budget,lamb,memory,per_epoch_results):
             value = Q_vals[i][max_action]
             action = [int(j) for j in bin(max_action)[2:].zfill(N)]
             print("State {} value {}".format(state,value))
-        z = 1/0
 
     max_action = np.argmax(Q_vals[state_rep])
     binary_val = bin(max_action)[2:].zfill(N)
@@ -148,56 +124,47 @@ def q_iteration_custom_epoch():
         return q_iteration_epoch(env,lamb,reward_function='custom')
     return q_iteration
 
-
-
-def index_computation_policy(env,state,budget,lamb,memory,per_epoch_results):
-    """Q Iteration policy that computes Q values for all combinations of states
+def compute_p_matrix(env,N):
+    """Compute a matrices of values of p_{i}(s) for all i, s
+    Useful to compute Linear-Whittle indices
     
     Arguments:
-        env: Simulator environment
-        state: Numpy array with 0-1 states for each agent
-        budget: Integer, max agents to select
-        lamb: Lambda, float, tradeoff between matching vs. activity
-        memory: Any information passed from previous epochs; unused here
-        per_epoch_results: The Q Values
+        env: RMABSimulator Environment
+        N: Integer, number of agents
     
-    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+    Returns: numpy matrix of size N x number of states"""
 
-    Q_vals = per_epoch_results
-    N = len(state)
+    n_states = env.transitions.shape[1]
+    p_matrix = np.zeros((N,n_states))
 
-    indices = np.zeros(N)
-    state_rep = binary_to_decimal(state)
+    for i in range(N):
+        for s in range(n_states):
+            default_state = [env.worst_state for _ in range(N)]
+            default_state[i] = s
+            p_matrix[i,s] = custom_reward(default_state,one_hot(i,N),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.active_states)
+    return p_matrix 
 
-    for trial in range(5):
-        for i in range(N):
-            max_index = 10
-            min_index = 0
+def compute_reward_matrix(env,N,lamb):
+    """Compute the individual rewards for each arm
+    We assume that this is \lambda/N for an active state
+    Zero otherwise
+    
+    Arguments:
+        env: RMABSimulator Environment
+        N: Integer, number of agents
+        lamb: Float, weight on the individual rewards vs. global reward
+    
+    Returns: 
+        numpy array of size N x number of states
+    """
 
-            for _ in range(20):
-                predicted_index = (max_index+min_index)/2 
-                other_agents = [i_prime for i_prime in range(N) if indices[i_prime]>=predicted_index and i_prime != i]
-                agent_vals = np.array(env.match_probability_list)[env.agent_idx]*state
+    n_states = env.transitions.shape[1]
+    reward_matrix = np.zeros((N,n_states,2))
 
-                other_agents = sorted(other_agents,key=lambda k: agent_vals[k],reverse=True)
+    for i in range(N):
+        for j in range(n_states):
+            if j in env.active_states:
+                reward_matrix[i,j] += lamb/N
+    
+    return reward_matrix 
 
-                agents_with_i = set(other_agents[:budget-1] + [i])
-                binary_with_i = binary_to_decimal([1 if i in agents_with_i else 0 for i in range(N)])
-                agents_without_i = set(other_agents[:budget-1])
-                binary_without_i = binary_to_decimal([1 if i in agents_without_i else 0 for i in range(N)])
-
-                q_with_i = Q_vals[state_rep,binary_with_i]
-                q_without_i = Q_vals[state_rep,binary_without_i]
-
-                if q_with_i > q_without_i + predicted_index:
-                    min_index = predicted_index 
-                else:
-                    max_index = predicted_index 
-            indices[i] = (max_index+min_index)/2
-
-    indices = np.argsort(indices)[-budget:][::-1]
-
-    action = np.zeros(N, dtype=np.int8)
-    action[indices] = 1
-
-    return action, None

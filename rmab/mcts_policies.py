@@ -1,11 +1,10 @@
 import numpy as np
 import random 
 
-from rmab.utils import Memoizer
 from rmab.whittle_policies import shapley_index_custom
 from rmab.baseline_policies import random_policy, compute_p_matrix, compute_reward_matrix
-from rmab.utils import custom_reward, one_hot, contextual_custom_reward
-from rmab.compute_whittle import get_multi_Q, Q_multi_prob, fast_compute_whittle_indices
+from rmab.utils import contextual_custom_reward
+from rmab.compute_whittle import Q_multi_prob, fast_compute_whittle_indices
 
 import time
 
@@ -27,7 +26,7 @@ class MonteCarloTreeSearchNode():
     Does so by abstracting away reward specifics
     To State-Action nodes"""
 
-    def __init__(self, state, simulation_no,transitions,parent=None, parent_action=None,use_whittle=False,memoizer=Memoizer('optimal'),time_limit=100):
+    def __init__(self, state, simulation_no,transitions,parent=None, parent_action=None,use_whittle=False,memoizer=None,time_limit=100):
         self.state = state
         self.parent = parent
         self.parent_action = parent_action
@@ -264,7 +263,6 @@ class StateAction():
             Use this to compute the Whittle Index"""
 
         last_state = []
-        p_matrix = self.memory[1]
 
         # Compute the State, Arms Played, and immideate marginal rewards
         state_choices = self.previous_state_actions
@@ -299,7 +297,6 @@ class StateAction():
                         action_0_1.append(0)
                 action_0_1 = np.array(action_0_1)
 
-                # TODO: Make this an option whether or not we select contextually 
                 total_reward += self.discount**i * get_reward_custom(corresponding_state,action_0_1,self.match_probs,self.lamb,self.env.reward_type,self.env.reward_parameters,self.env.active_states,self.env.context)
             return last_action, total_reward 
         arm_q = 0
@@ -373,7 +370,7 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
     match_probs = np.array(env.match_probability_list)[env.agent_idx]
     state_actions = []
     if memory == None:
-        memory = Memoizer('optimal'),np.array(shapley_index_custom(env,np.ones(len(env.agent_idx)),{})[0])
+        memory = None,np.array(shapley_index_custom(env,np.ones(len(env.agent_idx)),{})[0])
 
     s = StateAction(budget,env.discount,lamb,state,env.volunteers_per_arm,env.cohort_size,match_probs,rollout,env,use_raw_reward=True)
     s.contextual=contextual
@@ -387,7 +384,21 @@ def mcts_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none
     return action, memory 
 
 def run_mcts(env,Q_multi_prob_list, p_matrix,whittle_matrix,budget,state,lamb,contextual=True):
-    """Boilerplate for running the MCTS method"""
+    """Boilerplate for running the MCTS method
+    
+    Arguments: 
+        env: Simulator Environment
+        Q_multi_prob_list: Matrix of Q values for each agent x state
+        p_matrix: Matrix of marginal rewards for each agent x state
+        whittle_matrix: Numpy matrix of size N x States, which captures Whittle index for each
+            combination
+        budget: Integer, how many arms we can pull
+        state: Numpy array, state for each arm
+        lamb: Balance between engagement, global reward
+        contextual: Boolean, is this a contextual or non-contextual experiment
+    
+    Returns: Action, 0-1 list"""
+  
     
     start = time.time() 
     N = len(state)
@@ -449,6 +460,8 @@ def mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setu
     return run_mcts(env,Q_multi_prob_list,p_matrix,whittle_matrix,budget,state,lamb,contextual=contextual)
 
 def non_contextual_mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
+    """Run a variant of the MCTS Linear Policy, where contexts aren't used"""
+    
     return mcts_linear_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup=group_setup,attribution_method=attribution_method,contextual=False)
 
 def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional",contextual=True):
@@ -508,4 +521,6 @@ def mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_set
     return run_mcts(env,Q_multi_prob_list,u_matrix,whittle_matrix,budget,state,lamb,contextual=contextual)
 
 def non_contextual_mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none",attribution_method="proportional"):
+    """Run a variant of the MCTS Shapley policy where it doesn't incorporate the current context"""
+    
     return mcts_shapley_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup=group_setup,attribution_method=attribution_method,contextual=False)

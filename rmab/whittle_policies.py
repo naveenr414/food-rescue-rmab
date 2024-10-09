@@ -2,15 +2,12 @@
 
 import numpy as np
 
-from rmab.utils import Memoizer, contextual_custom_reward, binary_to_decimal, custom_reward, one_hot, one_hot_fixed, shapley_index_custom, shapley_index_custom_contexts, shapley_index_custom_fixed, compute_u_matrix
-from rmab.compute_whittle import arm_value_iteration_exponential, fast_arm_compute_whittle, fast_arm_compute_whittle_multi_prob, arm_compute_whittle, arm_compute_whittle_multi_prob, fast_compute_whittle_indices
+from rmab.utils import contextual_custom_reward, custom_reward, one_hot, one_hot_fixed, shapley_index_custom_contexts, shapley_index_custom_fixed, compute_u_matrix
+from rmab.compute_whittle import fast_compute_whittle_indices
 from rmab.baseline_policies import compute_reward_matrix, compute_p_matrix
 
 from copy import deepcopy, copy
-import random 
 import time 
-
-
 
 def whittle_activity_policy(env,state,budget,lamb,memory,per_epoch_results):
     """Whittle index policy based on computing the subsidy for each arm
@@ -41,11 +38,9 @@ def whittle_activity_policy(env,state,budget,lamb,memory,per_epoch_results):
     state_WI = [whittle_matrix[i][state[i]] for i in range(N)]
     sorted_WI = np.argsort(state_WI)[::-1]
 
-    # Filter sorted_WI to include only indices where the corresponding value in state_WI is >= 0
     filtered_WI = [i for i in sorted_WI if state_WI[i] >= 0]
 
     action = np.zeros(N, dtype=np.int8)
-    # Only assign action=1 to the top `budget` indices from the filtered sorted_WI
     action[filtered_WI[:budget]] = 1
     return action, whittle_matrix
 
@@ -81,11 +76,9 @@ def whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
     
     state_WI = [whittle_matrix[i][state[i]] for i in range(N)]
     sorted_WI = np.argsort(state_WI)[::-1]
-    # Filter sorted_WI to include only indices where the corresponding value in state_WI is >= 0
     filtered_WI = [i for i in sorted_WI if state_WI[i] >= 0]
 
     action = np.zeros(N, dtype=np.int8)
-    # Only assign action=1 to the top `budget` indices from the filtered sorted_WI
     action[filtered_WI[:budget]] = 1
 
     return action, whittle_matrix
@@ -131,23 +124,36 @@ def shapley_whittle_custom_policy(env,state,budget,lamb,memory, per_epoch_result
 
     sorted_WI = np.argsort(state_WI)[::-1]
 
-    # Filter sorted_WI to include only indices where the corresponding value in state_WI is >= 0
     filtered_WI = [i for i in sorted_WI if state_WI[i] >= 0]
 
     action = np.zeros(N, dtype=np.int8)
-    # Only assign action=1 to the top `budget` indices from the filtered sorted_WI
     action[filtered_WI[:budget]] = 1
 
     return action, whittle_matrix
 
 def get_whittle_function(contextual):
+    """Returns a function that computes the Linear marginal rewards per arm, given the pulled arms
+    
+    Arguments:
+        contextual: Boolean
+    
+    Returns: A function, which, given the pulled arms, computes marginal rewards for each arm"""
+
     def run_function(env,state,N,pulled_arms,shapley_memoizer):
         return whittle_match_prob_now(env,state,N,pulled_arms,contextual=contextual)
 
     return run_function
 
 def whittle_match_prob_now(env,state,N,pulled_arms,contextual=True):
-    start = time.time()
+    """Compute the Marginal reward for each arm given a set of pulled arms
+    
+    Arguments:
+        env: RMAB simulator environment
+        state: Numpy array of 0-1 states for each arm
+        N: Number of ARms
+        pulled_arms: List of pulled arms, by indices
+        contextual: Boolean, whether to use the contextual variant of the Shapley policy"""
+
     if len(pulled_arms) > 0:
         pulled_action = one_hot_fixed(pulled_arms[0],len(state),pulled_arms)
 
@@ -159,7 +165,6 @@ def whittle_match_prob_now(env,state,N,pulled_arms,contextual=True):
     else:
         pulled_action = [0 for i in range(len(state))]
         default_custom_reward = 0
-    start = time.time()
 
     match_prob_all = []
     for i in range(N):
@@ -172,19 +177,50 @@ def whittle_match_prob_now(env,state,N,pulled_arms,contextual=True):
             match_prob_all.append(custom_reward(state,new_action,np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters,env.active_states)-default_custom_reward)
     return match_prob_all
 
+def get_shapley_function(contextual):
+    """Returns a function that computes the Shapley values per arm, given the pulled arms
+    
+    Arguments:
+        contextual: Boolean
+    
+    Returns: A function, which, given the pulled arms, computes Shapley values for each arm"""
+    def run_function(env,state,N,pulled_arms,shapley_memoizer={}):
+        return shapley_match_prob_now(env,state,N,pulled_arms,shapley_memoizer,contextual=contextual)
+    return run_function
+
 def shapley_match_prob_now(env,state,N,pulled_arms,shapley_memoizer,contextual=True):
+    """Compute the Shapley values for each arm given a set of pulled arms
+    
+    Arguments:
+        env: RMAB simulator environment
+        state: Numpy array of 0-1 states for each arm
+        N: Number of ARms
+        pulled_arms: List of pulled arms, by indices
+        shapley_memoizer: Dictionary, which stores precomputed Shapley values
+        contextual: Boolean, whether to use the contextual variant of the Shapley policy"""
+    
     if contextual:
         match_prob_all = shapley_index_custom_fixed(env,state,shapley_memoizer,pulled_arms,env.context)[0]
     else:
         match_prob_all = shapley_index_custom_fixed(env,state,shapley_memoizer,pulled_arms,np.array(env.match_probability_list)[env.agent_idx])[0]
     return match_prob_all
 
-def get_shapley_function(contextual):
-    def run_function(env,state,N,pulled_arms,shapley_memoizer={}):
-        return shapley_match_prob_now(env,state,N,pulled_arms,shapley_memoizer,contextual=contextual)
-    return run_function
-
 def iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,match_prob_now_function,reward_matrix):
+    """Skeleton for running any iterative policy; which can be used for 
+    Shapley or Linear-Whittle Iterative Policies
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Information on previously computed Whittle indices, the memoizer
+        match_prob_now_function: Soem funcion that returns either the match probability
+            given some arms pulled, or the additional Shapley value
+        reward_matrix: Either the p_matrix or the u_matrix, to compute Linear- and Shapley-Whittle
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+    
     N = len(state)
     n_states = env.transitions.shape[1]
     
@@ -236,9 +272,9 @@ def iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,mat
 
 
 def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True):
-    """Whittle index policy based on computing the subsidy for each arm
-    This approximates the problem as the sum of Linear rewards, then 
-    Decomposes the problem into the problem for each arm individually
+    """Whittle index policy which iteratively selects arms
+    Essentially by first computing the Whittle indices, then one by one updating
+    As arms are selected
     
     Arguments:
         env: Simulator environment
@@ -268,12 +304,14 @@ def whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,cont
     return iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,whittle_function,reward_matrix)
 
 def non_contextual_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
+    """Variant of the Iterative Whittle policy, where the current context is unknown"""
     return whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=False)
 
 def shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=True):
     """Whittle index policy based on computing the subsidy for each arm
-    This approximates the problem as the sum of Linear rewards, then 
-    Decomposes the problem into the problem for each arm individually
+    This approximates the problem as the sum of Shapley values for each arm
+    Does so iteratively, by first selecting highest Whittle index, then updating
+    Whittle indices
     
     Arguments:
         env: Simulator environment
@@ -303,13 +341,14 @@ def shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_resu
     return iterative_policy_skeleton(env,state,budget,lamb,memory,per_epoch_results,shapley_function,reward_matrix)
 
 def non_contextual_shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
+    """Variant of the Iterative Policy, where the current context is unknown"""
     return shapley_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results,contextual=False)
 
 
 def contextual_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
-    """Whittle index policy based on computing the subsidy for each arm
-    This approximates the problem as the sum of Linear rewards, then 
-    Decomposes the problem into the problem for each arm individually
+    """Contextual Linear-Whittle Policy; basically consider the reward when
+    you know the context in the current timestep, and estimate for future timesteps
+    through an expansion of the state space
     
     Arguments:
         env: Simulator environment
@@ -397,9 +436,9 @@ def contextual_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
     return action, (new_reward_matrix,transitions)  
 
 def fast_contextual_whittle_policy(env,state,budget,lamb,memory,per_epoch_results):
-    """Whittle index policy based on computing the subsidy for each arm
-    This approximates the problem as the sum of Linear rewards, then 
-    Decomposes the problem into the problem for each arm individually
+    """Faster version of the contextual_whittle_policy, which is faster by sampling 
+    fewer contexts, and using only one context (the average)
+    This is less accurate however
     
     Arguments:
         env: Simulator environment
@@ -488,9 +527,9 @@ def fast_contextual_whittle_policy(env,state,budget,lamb,memory,per_epoch_result
 
 
 def contextual_shapley_policy(env,state,budget,lamb,memory,per_epoch_results):
-    """Whittle index policy based on computing the subsidy for each arm
-    This approximates the problem as the sum of Linear rewards, then 
-    Decomposes the problem into the problem for each arm individually
+    """Contextual Shapley policy, which computes arm values by expanding the 
+    state space, and sampling different contexts
+    For a faster version, see fast_contextual_shapley_policy
     
     Arguments:
         env: Simulator environment
@@ -580,9 +619,9 @@ def contextual_shapley_policy(env,state,budget,lamb,memory,per_epoch_results):
     return action, (new_reward_matrix,transitions) 
 
 def fast_contextual_shapley_policy(env,state,budget,lamb,memory,per_epoch_results):
-    """Whittle index policy based on computing the subsidy for each arm
-    This approximates the problem as the sum of Linear rewards, then 
-    Decomposes the problem into the problem for each arm individually
+    """Run a faster version of the contextual Shapley Policy
+    Essentially use one sample (which is the average), which reduces the 
+    State space needed to compute things
     
     Arguments:
         env: Simulator environment
