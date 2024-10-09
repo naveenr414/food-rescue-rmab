@@ -6,3 +6,4 @@ figures/
 results/
 runs/
 __pycache__/
+dist/

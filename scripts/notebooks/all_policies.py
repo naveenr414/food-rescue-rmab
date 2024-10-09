@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: light
 #       format_version: '1.5'
-#       jupytext_version: 1.15.2
+#       jupytext_version: 1.16.1
 #   kernelspec:
 #     display_name: food
 #     language: python
@@ -28,7 +28,7 @@ import sys
 import secrets
 from itertools import combinations
 
-from rmab.simulator import run_multi_seed
+from rmab.simulator import run_multi_seed, get_contextual_probabilities
 from rmab.whittle_policies import *
 from rmab.baseline_policies import *
 from rmab.mcts_policies import *
@@ -38,22 +38,23 @@ is_jupyter = 'ipykernel' in sys.modules
 
 # +
 if is_jupyter: 
-    seed        = 50
-    n_arms      = 4
+    seed        = 43
+    n_arms      = 10
     volunteers_per_arm = 1
-    budget      = 2
-    discount    = 0.9
+    budget      = 5
+    discount    = 0.9999
     alpha       = 3 
-    n_episodes  = 105
-    episode_len = 50 
+    n_episodes  = 5
+    episode_len = 50
     n_epochs    = 1
     save_with_date = False 
-    lamb = 0.5
+    lamb = 0
     prob_distro = 'uniform'
-    reward_type = "set_cover"
-    reward_parameters = {'universe_size': 20, 'arm_set_low': 6, 'arm_set_high': 8}
-    out_folder = 'iterative'
+    reward_type = "probability"
+    reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1, 'recovery_rate': 0}
+    out_folder = ''
     time_limit = 100
+    run_rate_limits = False 
 else:
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_arms',         '-N', help='num beneficiaries (arms)', type=int, default=2)
@@ -66,6 +67,7 @@ else:
     parser.add_argument('--alpha',          '-a', help='alpha: for conf radius', type=float, default=3)
     parser.add_argument('--lamb',          '-l', help='lambda for matching-engagement tradeoff', type=float, default=0.5)
     parser.add_argument('--universe_size', help='For set cover, total num unvierse elems', type=int, default=10)
+    parser.add_argument('--recovery_rate', help='How fast volunteers recover', type=float, default=0.1)
     parser.add_argument('--arm_set_low', help='Least size of arm set, for set cover', type=float, default=3)
     parser.add_argument('--arm_set_high', help='Largest size of arm set, for set cover', type=float, default=6)
     parser.add_argument('--reward_type',          '-r', help='Which type of custom reward', type=str, default='set_cover')
@@ -74,6 +76,7 @@ else:
     parser.add_argument('--out_folder', help='Which folder to write results to', type=str, default='iterative')
     parser.add_argument('--time_limit', help='Online time limit for computation', type=float, default=100)
     parser.add_argument('--use_date', action='store_true')
+    parser.add_argument('--run_rate_limits', action='store_true')
 
     args = parser.parse_args()
 
@@ -91,9 +94,12 @@ else:
     prob_distro = args.prob_distro
     out_folder = args.out_folder
     reward_type = args.reward_type
+    run_rate_limits = args.run_rate_limits
+    recovery_rate = args.recovery_rate 
     reward_parameters = {'universe_size': args.universe_size,
                         'arm_set_low': args.arm_set_low, 
-                        'arm_set_high': args.arm_set_high}
+                        'arm_set_high': args.arm_set_high, 
+                        'recovery_rate': args.recovery_rate}
     time_limit = args.time_limit 
 
 save_name = secrets.token_hex(4)  
@@ -116,60 +122,44 @@ results['parameters'] = {'seed'      : seed,
         'arm_set_low': reward_parameters['arm_set_low'], 
         'arm_set_high': reward_parameters['arm_set_high'],
         'time_limit': time_limit, 
+        'recovery_rate': reward_parameters['recovery_rate']
         } 
+
+results['parameters']
 
 # ## Index Policies
 
 seed_list = [seed]
-restrict_resources()
 
 # +
 policy = greedy_policy
 name = "greedy"
+print(name)
 
 rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
+results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
 results['ratio'] = simulator.ratio 
 print(np.mean(rewards['reward']))
 
 # +
 policy = random_policy
 name = "random"
+print(name)
 
 rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
 results['{}_reward'.format(name)] = rewards['reward']
 results['{}_match'.format(name)] =  rewards['match'] 
 results['{}_active'.format(name)] = rewards['active_rate']
 results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
-
-# +
-policy = whittle_activity_policy
-name = "whittle_activity"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
-print(np.mean(rewards['reward']))
-
-# +
-policy = whittle_policy
-name = "linear_whittle"
-
-rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
-results['{}_reward'.format(name)] = rewards['reward']
-results['{}_match'.format(name)] =  rewards['match'] 
-results['{}_active'.format(name)] = rewards['active_rate']
-results['{}_time'.format(name)] =  rewards['time']
+results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
 print(np.mean(rewards['reward']))
 # -
 
-if n_arms * volunteers_per_arm <= 4:
+if n_arms * volunteers_per_arm <= 4 and 'multi_state' not in prob_distro and 'two_timescale' not in prob_distro:
     policy = q_iteration_policy
     per_epoch_function = q_iteration_custom_epoch()
     name = "optimal"
@@ -179,20 +169,150 @@ if n_arms * volunteers_per_arm <= 4:
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 1000:
-    policy = shapley_whittle_custom_policy 
-    name = "shapley_whittle_custom"
+# +
+policy = whittle_activity_policy
+name = "whittle_activity"
+print(name)
 
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50),shapley_iterations=1000)
+rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+print(np.mean(rewards['reward']))
+
+# +
+policy = whittle_policy
+name = "linear_whittle"
+print(name)
+
+rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+results['{}_reward'.format(name)] = rewards['reward']
+results['{}_match'.format(name)] =  rewards['match'] 
+results['{}_active'.format(name)] = rewards['active_rate']
+results['{}_time'.format(name)] =  rewards['time']
+results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+print(np.mean(rewards['reward']))
+# -
+
+if 'context' in reward_type and n_arms * volunteers_per_arm <= 250:
+    policy = fast_contextual_whittle_policy
+    name = "fast_contextual_whittle"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
     results['{}_reward'.format(name)] = rewards['reward']
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 25:
+if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type  and 'two_timescale' not in prob_distro:
+    policy = contextual_whittle_policy
+    name = "contextual_whittle"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 1000:
+    policy = shapley_whittle_custom_policy 
+    name = "shapley_whittle_custom"
+    print(name)
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50),shapley_iterations=1000)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type and episode_len<=10000:
+    policy = fast_contextual_shapley_policy
+    name = "fast_contextual_shapley"
+    print(name)
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type and 'two_timescale' not in prob_distro:
+    policy = contextual_shapley_policy
+    name = "contextual_shapley"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 250 and episode_len<=10000:
+    policy = whittle_iterative_policy
+    name = "iterative_whittle"
+    print(name)
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type and episode_len <= 10000:
+    policy = non_contextual_whittle_iterative_policy
+    name = "non_contextual_iterative_whittle"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
+    print(np.mean(rewards['reward']))
+
+
+if n_arms * volunteers_per_arm <= 25 and reward_type != 'probability_context' and episode_len<=10000:
+    policy = shapley_whittle_iterative_policy
+    name = "shapley_iterative_whittle"
+    print(name)
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50),shapley_iterations=1000)
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+    print(np.mean(rewards['reward']))
+
+if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type and episode_len <= 10000:
+    policy = non_contextual_shapley_whittle_iterative_policy
+    name = "non_contextual_shapley_iterative_whittle"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
+    print(np.mean(rewards['reward']))
+
+
+if n_arms * volunteers_per_arm <= 25 and 'two_timescale' not in prob_distro and 'multi_state' not in prob_distro:
     policy = mcts_linear_policy
     name = "mcts_linear"
 
@@ -201,10 +321,25 @@ if n_arms * volunteers_per_arm <= 25:
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
     print(np.mean(rewards['reward']))
 
 
-if n_arms * volunteers_per_arm <= 25:
+if n_arms * volunteers_per_arm <= 250 and 'two_timescale' not in prob_distro and 'context' in reward_type:
+    policy = non_contextual_mcts_linear_policy
+    name = "non_contextual_mcts_linear"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
+    print(np.mean(rewards['reward']))
+
+
+if n_arms * volunteers_per_arm <= 25 and 'two_timescale' not in prob_distro and 'multi_state' not in prob_distro:
     policy = mcts_shapley_policy
     name = "mcts_shapley"
 
@@ -213,10 +348,26 @@ if n_arms * volunteers_per_arm <= 25:
     results['{}_match'.format(name)] =  rewards['match'] 
     results['{}_active'.format(name)] = rewards['active_rate']
     results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
     print(np.mean(rewards['reward']))
 
 
-if n_arms * volunteers_per_arm <= 25:
+if n_arms * volunteers_per_arm <= 250 and 'two_timescale' not in prob_distro and 'context' in reward_type:
+    policy = non_contextual_mcts_shapley_policy
+    name = "non_contextual_mcts_shapley"
+
+    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
+    results['{}_reward'.format(name)] = rewards['reward']
+    results['{}_match'.format(name)] =  rewards['match'] 
+    results['{}_active'.format(name)] = rewards['active_rate']
+    results['{}_time'.format(name)] =  rewards['time']
+    results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
+
+    print(np.mean(rewards['reward']))
+
+
+if n_arms * volunteers_per_arm <= 25 and run_rate_limits:
     policy = mcts_shapley_policy
     name = "mcts_shapley_40"
 
@@ -228,7 +379,7 @@ if n_arms * volunteers_per_arm <= 25:
     print(np.mean(rewards['reward']))
 
 
-if n_arms * volunteers_per_arm <= 25:
+if n_arms * volunteers_per_arm <= 25 and run_rate_limits:
     policy = mcts_shapley_policy
     name = "mcts_shapley_4"
 
@@ -240,29 +391,7 @@ if n_arms * volunteers_per_arm <= 25:
     print(np.mean(rewards['reward']))
 
 
-if n_arms * volunteers_per_arm <= 250:
-    policy = whittle_iterative_policy
-    name = "iterative_whittle"
-
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50))
-    results['{}_reward'.format(name)] = rewards['reward']
-    results['{}_match'.format(name)] =  rewards['match'] 
-    results['{}_active'.format(name)] = rewards['active_rate']
-    results['{}_time'.format(name)] =  rewards['time']
-    print(np.mean(rewards['reward']))
-
-if n_arms * volunteers_per_arm <= 25:
-    policy = shapley_whittle_iterative_policy
-    name = "shapley_iterative_whittle"
-
-    rewards, memory, simulator = run_multi_seed(seed_list,policy,results['parameters'],test_length=episode_len*(n_episodes%50),shapley_iterations=1000)
-    results['{}_reward'.format(name)] = rewards['reward']
-    results['{}_match'.format(name)] =  rewards['match'] 
-    results['{}_active'.format(name)] = rewards['active_rate']
-    results['{}_time'.format(name)] =  rewards['time']
-    print(np.mean(rewards['reward']))
-
-if n_arms * volunteers_per_arm <= 50:
+if n_arms * volunteers_per_arm <= 50 and run_rate_limits:
     policy = shapley_whittle_iterative_policy
     name = "shapley_iterative_whittle_100"
 
@@ -273,7 +402,7 @@ if n_arms * volunteers_per_arm <= 50:
     results['{}_time'.format(name)] =  rewards['time']
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 50:
+if n_arms * volunteers_per_arm <= 50 and run_rate_limits:
     policy = shapley_whittle_iterative_policy
     name = "shapley_iterative_whittle_10"
 
@@ -284,7 +413,7 @@ if n_arms * volunteers_per_arm <= 50:
     results['{}_time'.format(name)] =  rewards['time']
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 50:
+if n_arms * volunteers_per_arm <= 50 and run_rate_limits:
     policy = shapley_whittle_iterative_policy
     name = "shapley_iterative_whittle_1"
 

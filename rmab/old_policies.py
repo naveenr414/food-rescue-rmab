@@ -2366,3 +2366,188 @@ def get_groups(group_setup,best_group_arms,state,env,match_probs,all_match_probs
         num_groups = len(best_group_arms)
     
     return best_group_arms
+
+def whittle_index(env,state,budget,lamb,memoizer,reward_function="combined",shapley_values=None,contextual=False,match_probs=None,match_prob_now=None,p_matrix=None):
+    """Get the Whittle indices for each agent in a given state
+    
+    Arguments:
+        env: Simualtor RMAB environment
+        state: Numpy array of 0-1 for each volunteer, s_{i}
+        budget: Max arms to pick, K
+        lamb: Float, balancing matching and activity, \alpha 
+        memoizer: Object that stores previous Whittle index computations
+    
+    Returns: List of Whittle indices for each arm, w_{i}(s_{i})"""
+    N = len(state) 
+
+    if reward_function == "activity":
+        match_probability_list = [0 for i in range(len(env.agent_idx))]
+    elif shapley_values != None:
+        match_probability_list = np.array(shapley_values)
+    elif contextual or match_probs is not None:
+        match_probability_list = match_probs
+    else:
+        match_probability_list = np.array(env.match_probability_list)[env.agent_idx]
+
+    true_transitions = env.transitions 
+    discount = env.discount 
+
+    state_WI = np.zeros((N))
+    min_chosen_subsidy = -1 
+    for i in range(N):
+        arm_transitions = true_transitions[i//env.volunteers_per_arm]
+        if reward_function == "activity":
+            check_set_val = memoizer.check_set(arm_transitions+round(p_matrix[i][state[i]],4), state[i])
+        else:
+            if match_prob_now is not None: 
+                check_set_val = memoizer.check_set(arm_transitions+round(p_matrix[i][state[i]],4)+(round(match_prob_now[i],4) + 0.0001)*1000, state[i])
+            else:
+                check_set_val = memoizer.check_set(arm_transitions+round(p_matrix[i][state[i]],4), state[i])
+        if check_set_val != -1:
+            state_WI[i] = check_set_val
+        else:
+            if env.transitions.shape[1] == 2: 
+                if match_prob_now is not None:
+                    state_WI[i] = fast_arm_compute_whittle_multi_prob(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],match_prob_now=match_prob_now[i],num_arms=len(state))
+                else:
+                    state_WI[i] = fast_arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=match_probability_list[i],num_arms=len(state))
+            else:
+                if match_prob_now is not None:
+                    state_WI[i] = arm_compute_whittle_multi_prob(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,match_prob=0,match_prob_now=match_prob_now[i],num_arms=len(state),active_states=env.active_states, p_values=p_matrix[i])
+                else:
+                    start = time.time()
+                    state_WI[i] = arm_compute_whittle(arm_transitions, state[i], discount, min_chosen_subsidy,reward_function=reward_function,lamb=lamb,p_values=p_matrix[i],num_arms=len(state),active_states=env.active_states)                
+                    print("Whittle index took {} time".format(time.time()-start))
+            if reward_function == "activity":
+                memoizer.add_set(arm_transitions+round(p_matrix[i][state[i]],4), state[i], state_WI[i])
+            else:
+                if match_prob_now is not None:
+                    memoizer.add_set(arm_transitions+round(p_matrix[i][state[i]],4)+(round(match_prob_now[i],4) + 0.0001)*1000, state[i], state_WI[i])
+                else:
+                    memoizer.add_set(arm_transitions+round(p_matrix[i][state[i]],4), state[i], state_WI[i])
+    return state_WI
+
+
+def greedy_whittle_iterative_policy(env,state,budget,lamb,memory,per_epoch_results):
+    """Whittle index policy based on computing the subsidy for each arm
+    This approximates the problem as the sum of Linear rewards, then 
+    Decomposes the problem into the problem for each arm individually
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Information on previously computed Whittle indices, the memoizer
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+
+    N = len(state) 
+
+    if memory == None:
+        memoizer = Memoizer('optimal')
+    else:
+        memoizer = memory 
+
+    action = np.zeros(N, dtype=np.int8)
+    pulled_arms = []
+
+    for _ in range(budget):
+        match_probability_list = np.array([custom_reward(one_hot_fixed(i,len(state),pulled_arms),one_hot_fixed(i,len(state),pulled_arms),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))])
+        state_WI = whittle_index(env,state,budget,lamb,memoizer,match_probs=match_probability_list,reward_function="activity")
+        state_WI *= lamb 
+        state_WI += (1-lamb)*match_probability_list
+        state_WI[action == 1] = -100
+
+        argmax_val = np.argmax(state_WI)
+        action[argmax_val] = 1 
+        pulled_arms.append(argmax_val)
+
+    return action, memoizer 
+
+def whittle_greedy_policy(env,state,budget,lamb,memory, per_epoch_results):
+    """Combination of the Whittle index + match probability
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: Any information computed per epoch; unused here
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and the Whittle memoizer"""
+
+
+    N = len(state) 
+
+    if memory == None:
+        memoizer = Memoizer('optimal')
+    else:
+        memoizer = memory 
+
+    state_WI = whittle_index(env,state,budget,lamb,memoizer,reward_function="activity")
+    state_WI*=lamb 
+
+    match_probabilities = np.array([custom_reward(one_hot(i,len(state)),one_hot(i,len(state)),np.array(env.match_probability_list)[env.agent_idx],env.reward_type,env.reward_parameters) for i in range(len(state))])
+
+    state_WI += (1-lamb)*match_probabilities
+
+    sorted_WI = np.argsort(state_WI)[::-1]
+    action = np.zeros(N, dtype=np.int8)
+    action[sorted_WI[:budget]] = 1
+
+    return action, memoizer 
+
+def index_computation_policy(env,state,budget,lamb,memory,per_epoch_results):
+    """Q Iteration policy that computes Q values for all combinations of states
+    
+    Arguments:
+        env: Simulator environment
+        state: Numpy array with 0-1 states for each agent
+        budget: Integer, max agents to select
+        lamb: Lambda, float, tradeoff between matching vs. activity
+        memory: Any information passed from previous epochs; unused here
+        per_epoch_results: The Q Values
+    
+    Returns: Actions, numpy array of 0-1 for each agent, and memory=None"""
+
+    Q_vals = per_epoch_results
+    N = len(state)
+
+    indices = np.zeros(N)
+    state_rep = binary_to_decimal(state)
+
+    for trial in range(5):
+        for i in range(N):
+            max_index = 10
+            min_index = 0
+
+            for _ in range(20):
+                predicted_index = (max_index+min_index)/2 
+                other_agents = [i_prime for i_prime in range(N) if indices[i_prime]>=predicted_index and i_prime != i]
+                agent_vals = np.array(env.match_probability_list)[env.agent_idx]*state
+
+                other_agents = sorted(other_agents,key=lambda k: agent_vals[k],reverse=True)
+
+                agents_with_i = set(other_agents[:budget-1] + [i])
+                binary_with_i = binary_to_decimal([1 if i in agents_with_i else 0 for i in range(N)])
+                agents_without_i = set(other_agents[:budget-1])
+                binary_without_i = binary_to_decimal([1 if i in agents_without_i else 0 for i in range(N)])
+
+                q_with_i = Q_vals[state_rep,binary_with_i]
+                q_without_i = Q_vals[state_rep,binary_without_i]
+
+                if q_with_i > q_without_i + predicted_index:
+                    min_index = predicted_index 
+                else:
+                    max_index = predicted_index 
+            indices[i] = (max_index+min_index)/2
+
+    indices = np.argsort(indices)[-budget:][::-1]
+
+    action = np.zeros(N, dtype=np.int8)
+    action[indices] = 1
+
+    return action, None

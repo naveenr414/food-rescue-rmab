@@ -195,7 +195,7 @@ def dqn_policy(env,state,budget,lamb,memory,per_epoch_results,group_setup="none"
 
     past_states.append(state)
     past_actions.append(action)
-    rew = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters)
+    rew = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters,env.active_states,env.context)
 
     past_rewards.append(rew)
 
@@ -279,8 +279,6 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
                 all_future_states.append(next_state + [0 for i in range(N)])
                 corresponding_nums.append(rand_num)
         scheduler = lr_scheduler.StepLR(optimizer, step_size=10000, gamma=0.01)
-
-
     else:
         past_states, past_actions, past_final_actions, past_rewards, past_probs, past_next_states, q_losses, q_network, criterion, optimizer, target_model, current_epoch, all_future_states, corresponding_nums,scheduler,  avg_rewards = memory
     
@@ -366,7 +364,7 @@ def dqn_with_steps(env,state,budget,lamb,memory,per_epoch_results,group_setup="n
     for _ in range(budget):
         past_final_actions.append(final_action)
 
-    rew = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters)
+    rew = get_reward_custom(state,action,match_probs,lamb,env.reward_type,env.reward_parameters,env.active_states,env.context)
 
     for i in range(budget):
         past_rewards.append(rew)

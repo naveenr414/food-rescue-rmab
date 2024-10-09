@@ -35,6 +35,8 @@ def aggregate_data(results):
     ret_dict = {}
     for l in results:
         for k in l:
+            if 'burned_out' in k:
+                continue 
             if type(l[k]) == int or type(l[k]) == float:
                 if k not in ret_dict:
                     ret_dict[k] = []
@@ -49,6 +51,7 @@ def aggregate_data(results):
                 ret_dict[k] += list(l[k])
 
     for i in ret_dict:
+        ret_dict[i] = [j for j in ret_dict[i] if not np.isnan(j)]
         ret_dict[i] = (np.mean(ret_dict[i]),np.std(ret_dict[i]))
     
     return ret_dict 
@@ -68,7 +71,10 @@ def aggregate_normalize_data(results,baseline=None):
     for data_point in results_copy:
         avg_by_type = {}
         linear_whittle_results = {}
+
         for key in data_point:
+            if 'burned_out_rate' in key:
+                continue 
             is_list = False
             if type(data_point[key]) == list and (type(data_point[key][0]) == int or type(data_point[key][0]) == float):
                 value = data_point[key][0]
@@ -76,8 +82,8 @@ def aggregate_normalize_data(results,baseline=None):
                 value = data_point[key]
             elif type(data_point[key]) == list and type(data_point[key][0]) == list:
                 is_list = True 
-                value = data_point[key][0]
-                data_point[key] = np.array(data_point[key][0])
+                value = np.array(data_point[key][0])
+                data_point[key] = value 
             else:
                 continue 
             data_type = key.split("_")[-1]
@@ -91,8 +97,7 @@ def aggregate_normalize_data(results,baseline=None):
                 data_type = key.split("_")[-1]
                 if data_type in avg_by_type:
                     if type(avg_by_type[data_type]) == type(np.array([1,2])):
-                        data_point[key] = data_point[key]/avg_by_type[data_type]
-                        data_point[key] -= 1
+                        data_point[key] = data_point[key][avg_by_type[data_type] != 0]/avg_by_type[data_type][avg_by_type[data_type] != 0]
                     else:
                         data_point[key][0] /= float(avg_by_type[data_type])
 
