@@ -1,42 +1,54 @@
-# Restless Bandits with Global Rewards
-This code evaluates and tests restless bandits with a global reward. We develop policies which extend Whittle indices to account for global non-separable rewards. 
+# Restless Bandits with Global Rewards and Applications to Food Rescue
+![Paper Overview](img/main_results.png)
 
-The code contains experiments using a synthetic dataset, and real-world data using a Food Rescue dataset is hidden due to confidentiality.
+This repository contains the implementation for the paper ["Restless Bandits with Global Rewards and Applications to Food Rescue"](https://arxiv.org/abs/2406.00738), published at NeurIPS 2024.
 
-## Directory Structure
-The `rmab` folder contains most of the code for core algorithms and functions. 
-Whittle-index policies are in `whittle_policies.py`, baselines are in `baseline_policies.py`, MCTS in `mcts_policies.py` and RL policies in `dqn_policies.py`. Bandit simulator code is in `simulator.py`, while food rescue code is in `fr_dynamics.py`. 
+This work was done by [Naveen Raman](https://naveenraman.com/), [Ryan Shi](https://ryanzshi.github.io), [Sean Hudson](https://www.linkedin.com/in/sean-hudson-ba9b8759/), [Ameesh Kapoor](https://www.linkedin.com/in/ameeshkapoor/), and [Fei Fang](https://feifang.info). 
 
-The scripts folder uses these functions to run experiments. 
-Each experiment is captured by an interactive Jupyter notebook, which is in the `scripts/notebooks` folder, and runs the experiment for one parameter combination. 
-Each experiment is also paired with a Python file, which is a converted version of the Jupyter script.
-The `scripts/bash_scripts` folder runs different main and ablation scripts by calling the `scripts/notebooks` folder. 
-Results are written to the `result` folder. 
+#### TL;DR 
 
-## Running Experiments
-First, create all the folders needed to run experiments by running
-```bash
-bash scripts/bash_scripts/main_scripts/create_folders.sh
+Despite the successful application of restless bandits to real-world applications, a key limiting assumption is the separability of rewards into a sum across arms. 
+We address this deficiency by proposing restless-multi-armed bandit with global rewards, a generalization of resltess bandits to global non-separable rewards. 
+We develop a set of policies by extending Whittle indices and prove approximation  bounds for these policies. 
+Empirically, we demonstrate that our proposed policies outperform baselines with synthetic data and demonstrate how methodological improvements can improve trip completion rate in food rescue
+
+## Citation
+If you use our code for your research, please cite this as
 ```
-Then run 
-```bash
-pip install .
+@article{raman2024global,
+  title={Global Rewards in Restless Multi-Armed Bandits},
+  author={Raman, Naveen and Shi, Ryan and Fang, Fei},
+  journal={arXiv preprint arXiv:2406.00738},
+  year={2024}
+}
+```
+## Setup
+
+#### Installation
+To run experiments with global restless bandits, first clone this repository
+
+```$ git clone https://github.com/naveenr414/food-rescue-rmab``` 
+
+Then to install the dependencies run the following
+```
+$ conda env create --file environment.yaml
+$ python setup.py install
+$ bash scripts/bash_scripts/create_folders.sh
 ```
 
-Experiments are run from the `scripts/notebooks` folder. For example, to run all experiments with the Linear reward function, from within the `scripts/notebooks` folder, run
-```
-bash ../main_scripts/run_linear.sh
-```
-The `Plotting.ipynb` notebook uses the information from the results folder to create plots. 
+This will create a new environment, called `food`, from which to run the code
+To test whether the installation was successful, run 
+```import rmab```
 
-## Requirements
-All requirements are contained in the ``environment.yaml'' file. 
-To creaet an anaconda environment from this, run
-```
-conda env create --file environment.yaml
-```
+#### Evaluating Policies
+To evaluate policies, run the `scripts/notebooks/All Policies.ipynb` notebook. 
+This notebook evaluates all policies based on a set of parameters, and writes results to the `results/${out_folder}` folder, where out_folder is a parameter. 
 
-## Running custom policies
+#### Re-Running Experiments
+All bash scripts for experiments can be found in the `scripts/bash_scripts/main_scripts` folder. 
+To run all the experiments, run `bash scripts/bash_scripts/main_scripts/run_all_experiments.sh`
+
+#### Running custom policies
 To run custom policies, define a function that takes in an environment and a state, then returns an action
 For example, to define the random policy: 
 ```
