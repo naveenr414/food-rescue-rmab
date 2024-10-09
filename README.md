@@ -1,5 +1,5 @@
 # Restless Bandits with Global Rewards and Applications to Food Rescue
-![Paper Overview](img/main_results.png)
+![Paper Overview](img/main_results_2.png)
 
 This repository contains the implementation for the paper ["Restless Bandits with Global Rewards and Applications to Food Rescue"](https://arxiv.org/abs/2406.00738), published at NeurIPS 2024.
 
