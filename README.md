@@ -32,7 +32,7 @@ To run experiments with global restless bandits, first clone this repository
 Then to install the dependencies run the following
 ```
 $ conda env create --file environment.yaml
-$ python setup.py install
+$ python install -e .
 $ bash scripts/bash_scripts/create_folders.sh
 ```
 

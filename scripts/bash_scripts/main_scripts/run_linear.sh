@@ -2,7 +2,7 @@
 
 cd scripts/notebooks
 
-for seed in $(seq 43 57); 
+for seed in $(seq 43 43); 
 do 
     echo ${seed}
 

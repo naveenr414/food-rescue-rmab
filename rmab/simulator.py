@@ -1,4 +1,3 @@
-import gym
 import numpy as np
 from rmab.fr_dynamics import *
 from rmab.fr_predictions import *
@@ -11,7 +10,7 @@ import time
 from copy import deepcopy
 from collections import Counter 
 
-class RMABSimulator(gym.Env):
+class RMABSimulator:
     '''
     This simulator simulates the interaction with a set of arms with unknown transition probabilities
     but with additional side information. This setup is aligned with restless multi-armed bandit problems

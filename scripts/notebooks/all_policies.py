@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: light
 #       format_version: '1.5'
-#       jupytext_version: 1.15.2
+#       jupytext_version: 1.16.1
 #   kernelspec:
 #     display_name: food
 #     language: python
@@ -45,14 +45,14 @@ if is_jupyter:
     discount    = 0.9999
     alpha       = 3 
     n_episodes  = 5
-    episode_len = 5000
+    episode_len = 50
     n_epochs    = 1
     save_with_date = False 
     lamb = 0
-    prob_distro = 'two_timescale'
+    prob_distro = 'uniform'
     reward_type = "probability"
     reward_parameters = {'universe_size': 20, 'arm_set_low': 0, 'arm_set_high': 1, 'recovery_rate': 0}
-    out_folder = 'journal_results/contextual'
+    out_folder = ''
     time_limit = 100
     run_rate_limits = False 
 else:
@@ -125,10 +125,11 @@ results['parameters'] = {'seed'      : seed,
         'recovery_rate': reward_parameters['recovery_rate']
         } 
 
+results['parameters']
+
 # ## Index Policies
 
 seed_list = [seed]
-restrict_resources()
 
 # +
 policy = greedy_policy
@@ -270,7 +271,7 @@ if n_arms * volunteers_per_arm <= 250 and episode_len<=10000:
 
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 250 and 'two_timescale' not in prob_distro and 'context' in reward_type:
+if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type and episode_len <= 10000:
     policy = non_contextual_whittle_iterative_policy
     name = "non_contextual_iterative_whittle"
 
@@ -297,7 +298,7 @@ if n_arms * volunteers_per_arm <= 25 and reward_type != 'probability_context' an
     results['{}_burned_out_rate'.format(name)] =  rewards['burned_out_rate']
     print(np.mean(rewards['reward']))
 
-if n_arms * volunteers_per_arm <= 250 and 'two_timescale' not in prob_distro and 'context' in reward_type:
+if n_arms * volunteers_per_arm <= 250 and 'context' in reward_type and episode_len <= 10000:
     policy = non_contextual_shapley_whittle_iterative_policy
     name = "non_contextual_shapley_iterative_whittle"
 
