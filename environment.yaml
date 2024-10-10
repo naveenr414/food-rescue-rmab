@@ -1,7 +1,8 @@
-name: test_food
+name: food
 channels:
   - https://conda.anaconda.org/gurobi
   - defaults
+  - pytorch
 dependencies:
   - python=3.8
   - numpy
@@ -17,4 +18,7 @@ dependencies:
   - scikit-learn
   - numba
   - jupytext
-prefix: /usr0/home/naveenr/miniconda3/envs/test_food
+  - pip 
+  - pip:
+      - markovianbandit-pkg 
+prefix: /usr0/home/naveenr/miniconda3/envs/food

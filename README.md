@@ -32,6 +32,7 @@ To run experiments with global restless bandits, first clone this repository
 Then to install the dependencies run the following
 ```
 $ conda env create --file environment.yaml
+$ conda activate food
 $ pip install -e .
 $ bash scripts/bash_scripts/main_scripts/create_folders.sh
 ```
@@ -124,3 +125,6 @@ def random_policy(env,state,budget,lamb,memory, per_epoch_results):
 
     return action, None
 ```
+
+#### Results
+Our results are available in a zip file [here](https://cmu.box.com/s/e5pwi268gy8qentkjlluvk4wehdwhcdx). 

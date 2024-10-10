@@ -22,6 +22,6 @@ mkdir results/baselines/synthetic_transitions
 mkdir results/baselines/all
 mkdir results/baselines/mcts
 
-
+touch rmab/secret.py
 
 
